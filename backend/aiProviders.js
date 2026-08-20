@@ -588,7 +588,7 @@ export class OpenRouterProvider {
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${this.apiKey}`,
-              "HTTP-Referer": "http://localhost:4000",
+              "HTTP-Referer": process.env.PUBLIC_URL || "http://localhost:4000",
               "X-Title": "Hermes",
             },
             body: JSON.stringify({
@@ -681,7 +681,7 @@ export class OpenRouterProvider {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.apiKey}`,
-          "HTTP-Referer": "http://localhost:4000",
+          "HTTP-Referer": process.env.PUBLIC_URL || "http://localhost:4000",
           "X-Title": "Hermes",
         },
         body: JSON.stringify({
