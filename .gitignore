@@ -1,0 +1,16 @@
+node_modules/
+dist/
+dist-ssr/
+coverage/
+.cache/
+.env
+backend/.env
+backend/data/*.json
+backend/data/uploads/
+*.log
+.DS_Store
+.vscode/
+.idea/
+!.env.example
+!backend/.env.example
+!frontend/.env.example

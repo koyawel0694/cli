@@ -1,3 +1,6 @@
 node_modules/
 /data
-.env.example
+!.env.example
+data/*.json
+data/uploads/
+*.log

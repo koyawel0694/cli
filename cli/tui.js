@@ -48,7 +48,7 @@ const PIPELINE = [
   "Finding suspicious behavior",
   "Preparing recommendation",
 ];
-const THOUGHT_DURS = ["1.1s", "4.3s", "301ms", "2.4s", "900ms"];
+const THOUGHT_DURS = ["1.1s", "4.3s", "300ms", "2.4s", "900ms"];
 const SKILL_COLORS = {
   debugging: C.red,
   coding: C.cyan,
