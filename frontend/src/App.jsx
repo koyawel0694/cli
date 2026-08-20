@@ -1093,6 +1093,60 @@ function UiBreakdown({ exp, onReply }) {
   );
 }
 
+function ToolCallItem({ t }) {
+  const isEdit = t.name === "str_replace" || t.name === "modify_file" || t.name === "replace_in_file";
+  if (isEdit) {
+    const args = t.args || {};
+    const filePath = args.path || "file";
+    const replacements = [];
+    if (args.replacements && Array.isArray(args.replacements)) {
+      for (const r of args.replacements) {
+        replacements.push({ old: String(r.oldString ?? ""), nw: String(r.newString ?? "") });
+      }
+    } else {
+      const old = String(args.from ?? args.old_str ?? "");
+      const nw = String(args.to ?? args.new_str ?? "");
+      if (old || nw) replacements.push({ old, nw });
+    }
+    return (
+      <div className="tool-call-item tool-call-edit">
+        <div className="tool-call-edit-header">
+          <span className="op-arrow">←</span> Edit <span className="tool-call-path">{filePath}</span>
+        </div>
+        {replacements.map((r, ri) => {
+          const oldLines = r.old.split("\n");
+          const nwLines = r.nw.split("\n");
+          return (
+            <div key={ri} className="tool-call-diff">
+              {oldLines.map((line, li) => (
+                <div key={`old-${li}`} className="diff-line diff-remove">
+                  <span className="diff-marker">-</span>
+                  <span className="diff-content">{line}</span>
+                </div>
+              ))}
+              {nwLines.map((line, li) => (
+                <div key={`new-${li}`} className="diff-line diff-add">
+                  <span className="diff-marker">+</span>
+                  <span className="diff-content">{line}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+        {t.error && <div className="tool-call-error">{t.error}</div>}
+      </div>
+    );
+  }
+  const isCmd = t.name === "execute_command" || t.name === "git";
+  return (
+    <div className="thinking-op">
+      <span className="op-arrow">{isCmd ? "$" : "→"}</span> {t.name} {" "}
+      {isCmd ? (t.args?.command || t.args?.operation || JSON.stringify(t.args)) : JSON.stringify(t.args)}
+      {t.error ? <span className="tool-call-error"> · failed</span> : ""}
+    </div>
+  );
+}
+
 function ThinkingSection({ exp }) {
   const [open, setOpen] = useState(true);
   const totalTime = ((exp.completedAt || Date.now()) - exp.createdAt) / 1000;
@@ -1158,16 +1212,11 @@ function ThinkingSection({ exp }) {
                 </div>
               ))}
             </div>
-          )}
-          {exp.toolCalls?.length > 0 && (
+          )}              {exp.toolCalls?.length > 0 && (
             <div className="thinking-group">
               <div className="thinking-group-label">Tools</div>
               {exp.toolCalls.map((t, i) => (
-                <div key={i} className="thinking-op">
-                  <span className="op-arrow">→</span> {t.name}{" "}
-                  {JSON.stringify(t.args)}
-                  {t.error ? " · failed" : ""}
-                </div>
+                <ToolCallItem key={i} t={t} />
               ))}
             </div>
           )}
@@ -1207,6 +1256,7 @@ function ChatThread({
 }) {
   const [reply, setReply] = useState("");
   const [replying, setReplying] = useState(false);
+  const [showWork, setShowWork] = useState(false);
   const [copiedKey, setCopiedKey] = useState(null);
   const [editingIndex, setEditingIndex] = useState(null);
   const [editText, setEditText] = useState("");
@@ -1232,6 +1282,10 @@ function ChatThread({
     ? exp.findings
     : parseFindings(lastAssistant?.content || "");
   const busy = exp.status === "running" || exp.status === "needs_approval";
+
+  useEffect(() => {
+    setShowWork(false);
+  }, [exp.id, exp.status]);
 
   const fmtTime = (ts) =>
     ts
@@ -1404,39 +1458,51 @@ function ChatThread({
                 </div>
                 {m.content && (
                   <>
-                    {m === lastAssistant && <ThinkingSection exp={exp} />}
                     {m === lastAssistant && exp.status === "completed" && (
-                      <DiagnosisCard d={exp.diagnosis} />
+                      <button
+                        className="work-toggle"
+                        onClick={() => setShowWork((visible) => !visible)}
+                      >
+                        <Icon name={showWork ? "arrow" : "sliders"} size={13} />
+                        {showWork ? "Hide task details" : "Show full task"}
+                      </button>
                     )}
                     {m === lastAssistant &&
-                      exp.status === "completed" &&
-                      exp.diagnosis && (
-                        <DiagnosisActions
-                          exp={exp}
-                          onReply={onReply}
-                          onApplyFix={onApplyFix}
-                        />
-                      )}
-                    {m === lastAssistant &&
-                      exp.status === "completed" &&
-                      exp.uiAnalysis && (
-                        <UiBreakdown exp={exp} onReply={onReply} />
-                      )}
-                    {m === lastAssistant &&
-                      exp.status === "completed" &&
-                      exp.brainstorm && <BrainstormCard b={exp.brainstorm} />}
-                    {m === lastAssistant &&
-                      exp.status === "completed" &&
-                      findings.length > 0 && (
-                        <div className="findings">
-                          <h3>Findings</h3>
-                          {findings.map((f, j) => (
-                            <div key={j} className={`finding ${severityOf(f)}`}>
-                              <span className="finding-mark" />
-                              <span>{stripMarker(f)}</span>
-                            </div>
-                          ))}
-                        </div>
+                      (exp.status !== "completed" || showWork) && (
+                        <>
+                          <ThinkingSection exp={exp} />
+                          {exp.status === "completed" && (
+                            <DiagnosisCard d={exp.diagnosis} />
+                          )}
+                          {exp.status === "completed" && exp.diagnosis && (
+                            <DiagnosisActions
+                              exp={exp}
+                              onReply={onReply}
+                              onApplyFix={onApplyFix}
+                            />
+                          )}
+                          {exp.status === "completed" && exp.uiAnalysis && (
+                            <UiBreakdown exp={exp} onReply={onReply} />
+                          )}
+                          {exp.status === "completed" && exp.brainstorm && (
+                            <BrainstormCard b={exp.brainstorm} />
+                          )}
+                          {exp.status === "completed" &&
+                            findings.length > 0 && (
+                              <div className="findings">
+                                <h3>Findings</h3>
+                                {findings.map((f, j) => (
+                                  <div
+                                    key={j}
+                                    className={`finding ${severityOf(f)}`}
+                                  >
+                                    <span className="finding-mark" />
+                                    <span>{stripMarker(f)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                        </>
                       )}
                     <Markdown text={m.content} />
                   </>

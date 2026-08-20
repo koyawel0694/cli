@@ -1,4 +1,3 @@
-                   
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout, argv, exit } from "node:process";
 import { spawn } from "node:child_process";
@@ -17,7 +16,6 @@ const POLL_MS = 1200;
 const MAX_WAIT_MS = 15 * 60 * 1000;
 const BACKEND_STARTUP_TIMEOUT_MS = 30 * 1000;
 
-                                      
 function getVersion() {
   try {
     const pkg = JSON.parse(
@@ -75,6 +73,57 @@ let projects = [];
 const watchCtrl = { stop: false };
 let backendProcess = null;
 
+const WS_URL = API.replace(/^http/, "ws") + "/ws";
+let ws = null;
+let wsConnected = false;
+let wsSubscriptions = new Set();
+let wsTokenBuffer = "";
+let wsTokenCallback = null;
+
+function wsConnect() {
+  if (
+    ws &&
+    (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+  )
+    return;
+  try {
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => {
+      wsConnected = true;
+      for (const id of wsSubscriptions) {
+        ws.send(JSON.stringify({ action: "subscribe", experimentId: id }));
+      }
+    };
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(String(event.data));
+        if (msg.type === "token" && wsTokenCallback) {
+          wsTokenCallback(msg.token);
+        }
+      } catch {}
+    };
+    ws.onclose = () => {
+      wsConnected = false;
+      setTimeout(wsConnect, 3000);
+    };
+    ws.onerror = () => {};
+  } catch {}
+}
+
+function wsSubscribe(expId) {
+  wsSubscriptions.add(expId);
+  if (wsConnected && ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: "subscribe", experimentId: expId }));
+  }
+}
+
+function wsUnsubscribe(expId) {
+  wsSubscriptions.delete(expId);
+  if (wsConnected && ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: "unsubscribe", experimentId: expId }));
+  }
+}
+
 const rl = createInterface({ input: stdin, output: stdout });
 
 function formatAnswer(text) {
@@ -101,6 +150,68 @@ function formatAnswer(text) {
     out.push(line);
   }
   return out.join("\n");
+}
+
+function conversationText(exp) {
+  const messages = exp?.messages?.length
+    ? exp.messages
+    : [
+        { role: "user", content: exp?.task || "" },
+        ...(exp?.answer ? [{ role: "assistant", content: exp.answer }] : []),
+      ];
+  const lines = [`# Hermes Conversation #${exp?.id || "unknown"}`, ""];
+  for (const message of messages) {
+    const role = message.role === "assistant" ? "Hermes" : "You";
+    lines.push(`## ${role}`, "", String(message.content || ""), "");
+  }
+  return lines.join("\n").trim() + "\n";
+}
+
+async function copyToClipboard(text) {
+  if (process.platform !== "win32") return false;
+  return new Promise((resolve) => {
+    const child = spawn(
+      "powershell",
+      ["-NoProfile", "-Command", "$input | Set-Clipboard"],
+      {
+        stdio: ["pipe", "ignore", "ignore"],
+        windowsHide: true,
+      },
+    );
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+    child.stdin.end(text);
+  });
+}
+
+async function exportConversation(arg = "") {
+  if (!current?.id) {
+    console.log(
+      c(C.dim, "No active conversation. Run a task or /open <id> first."),
+    );
+    return;
+  }
+  const exp = await api(`/api/experiments/${current.id}`);
+  const text = conversationText(exp);
+  const target = arg
+    ? path.resolve(arg)
+    : path.resolve(`hermes-conversation-${exp.id}.md`);
+  await fsPromises.writeFile(target, text, "utf8");
+  console.log(c(C.green, `Conversation exported to ${target}`));
+}
+
+async function copyConversation() {
+  if (!current?.id) {
+    console.log(
+      c(C.dim, "No active conversation. Run a task or /open <id> first."),
+    );
+    return;
+  }
+  const exp = await api(`/api/experiments/${current.id}`);
+  const copied = await copyToClipboard(conversationText(exp));
+  if (copied)
+    console.log(c(C.green, "Entire conversation copied to the clipboard."));
+  else console.log(conversationText(exp));
 }
 
 function printBanner() {
@@ -148,10 +259,21 @@ function printHelp() {
   console.log("  /list                     List recent experiments");
   console.log("  /cancel [id]              Cancel a running experiment");
   console.log("  /delete <id>              Delete an experiment");
+  console.log(
+    "  /export [path]            Export the entire active conversation",
+  );
+  console.log(
+    "  /copy                     Copy the entire active conversation",
+  );
   console.log("  /connect [path]           Connect a folder as a project");
   console.log("  /projects                 List projects");
   console.log("  /project <id|name>        Set active project");
   console.log("  /skills                   List available skills");
+  console.log("  /model                    Select AI model");
+  console.log("  /model list               List available models");
+  console.log("  /model current            Show current model");
+  console.log("  /model use <model>        Switch model");
+  console.log("  /model reset              Restore default model");
   console.log("");
   console.log(c(C.bold, "Skill commands (force a specific skill):"));
   console.log("  /debug <task>             Force the Debugging skill");
@@ -164,8 +286,6 @@ function printHelp() {
   console.log("");
   console.log(c(C.dim, "Anything else you type becomes a task."));
 }
-
-                                                             
 
 async function isBackendRunning() {
   try {
@@ -229,8 +349,6 @@ async function checkHealth() {
   const ok = await ensureBackend();
   if (!ok) process.exit(1);
 }
-
-                                                              
 
 const SKILL_LABELS = {
   debugging: { label: "debug", color: C.red },
@@ -364,43 +482,74 @@ async function watch(expId) {
   let lastProgress = "";
   let sawApproval = false;
   const started = Date.now();
-  while (Date.now() - started < MAX_WAIT_MS) {
-    if (watchCtrl.stop) {
-      console.log(
-        c(
-          C.yellow,
-          "Stopped watching — experiment keeps running in the background. Use /open to reattach.",
-        ),
-      );
-      return;
+  let streaming = false;
+  let streamBuffer = "";
+
+  wsConnect();
+  wsSubscribe(expId);
+  wsTokenCallback = (token) => {
+    if (!streaming) {
+      streaming = true;
+      process.stdout.write(c(C.dim, "  ▸ "));
     }
-    await sleep(POLL_MS);
-    const exp = await api(`/api/experiments/${expId}`);
-    const prog = (exp.progress || []).join(" ▸ ");
-    if (prog && prog !== lastProgress) {
-      lastProgress = prog;
-      console.log(c(C.dim, `  ▸ ${prog}`));
+    streamBuffer += token;
+    process.stdout.write(token);
+  };
+
+  try {
+    while (Date.now() - started < MAX_WAIT_MS) {
+      if (watchCtrl.stop) {
+        console.log(
+          c(
+            C.yellow,
+            "Stopped watching — experiment keeps running in the background. Use /open to reattach.",
+          ),
+        );
+        return;
+      }
+      await sleep(POLL_MS);
+      const exp = await api(`/api/experiments/${expId}`);
+      const prog = (exp.progress || []).join(" ▸ ");
+      if (prog && prog !== lastProgress) {
+        lastProgress = prog;
+        if (streaming) {
+          process.stdout.write("\n");
+          streaming = false;
+        }
+        console.log(c(C.dim, `  ▸ ${prog}`));
+      }
+      if (exp.status === "needs_approval") {
+        sawApproval = true;
+        if (streaming) {
+          process.stdout.write("\n");
+          streaming = false;
+        }
+        await handleApproval(exp);
+        continue;
+      }
+      if (
+        exp.status === "completed" ||
+        exp.status === "failed" ||
+        exp.status === "cancelled"
+      ) {
+        if (streaming) {
+          process.stdout.write("\n");
+          streaming = false;
+        }
+        await renderDone(exp);
+        return;
+      }
     }
-    if (exp.status === "needs_approval") {
-      sawApproval = true;
-      await handleApproval(exp);
-      continue;
-    }
-    if (
-      exp.status === "completed" ||
-      exp.status === "failed" ||
-      exp.status === "cancelled"
-    ) {
-      await renderDone(exp);
-      return;
-    }
+    console.log(
+      c(
+        C.yellow,
+        "Still running after 15 min — it continues in the background. Use /open to reattach.",
+      ),
+    );
+  } finally {
+    wsTokenCallback = null;
+    wsUnsubscribe(expId);
   }
-  console.log(
-    c(
-      C.yellow,
-      "Still running after 15 min — it continues in the background. Use /open to reattach.",
-    ),
-  );
 }
 
 async function runTask(task, forceSkill = null) {
@@ -414,7 +563,7 @@ async function runTask(task, forceSkill = null) {
     await watch(current.id);
     return;
   }
-                                                                      
+
   if (forceSkill) {
     current = null;
     console.log(c(C.dim, `Using skill: ${forceSkill}`));
@@ -423,12 +572,11 @@ async function runTask(task, forceSkill = null) {
     method: "POST",
     body: JSON.stringify({ task, projectId: currentProjectId || undefined }),
   });
-                                                                   
+
   let exp = await api(`/api/experiments/${created.id}`);
-                                                              
+
   if (forceSkill && exp.status === "running") {
     exp.skill = forceSkill;
-                                                                                   
   }
   current = { id: exp.id };
   printTaskHead(exp);
@@ -438,6 +586,27 @@ async function runTask(task, forceSkill = null) {
 async function refreshProjects() {
   projects = await api("/api/projects").catch(() => []);
   return projects;
+}
+
+function printModels(data) {
+  console.log(c(C.cyan, "Models"));
+  for (const group of data.models || []) {
+    console.log(
+      `  ${group.label} (${group.provider})${group.available?.available ? "" : c(C.yellow, " [not configured]")}`,
+    );
+    for (const model of group.models || []) {
+      const current =
+        data.current?.provider === group.provider &&
+        data.current?.model === model.name;
+      console.log(`    ${current ? c(C.green, "✓ ") : "  "}${model.name}`);
+    }
+  }
+}
+
+function parseModelRef(value) {
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash === value.length - 1) return null;
+  return { provider: value.slice(0, slash), model: value.slice(slash + 1) };
 }
 
 async function runCommand(line) {
@@ -534,6 +703,12 @@ async function runCommand(line) {
       console.log(c(C.dim, `Deleted ${id}.`));
       break;
     }
+    case "/export":
+      await exportConversation(arg);
+      break;
+    case "/copy":
+      await copyConversation();
+      break;
     case "/connect": {
       const connectPath = arg ? path.resolve(arg) : process.cwd();
       let connectStat;
@@ -571,7 +746,7 @@ async function runCommand(line) {
             `Path: ${newProject.path} · id: ${newProject.id} · stats: ${JSON.stringify(newProject.stats || {})}`,
           ),
         );
-                                                                  
+
         try {
           const settings = await api("/api/settings");
           if (settings.trustLevel < 2)
@@ -624,6 +799,60 @@ async function runCommand(line) {
       console.log(c(C.dim, `Active project: ${p.name}`));
       break;
     }
+    case "/model": {
+      const modelArg = arg.trim();
+      if (!modelArg) {
+        const data = await api("/api/models");
+        printModels(data);
+        break;
+      }
+      if (modelArg.toLowerCase() === "list") {
+        printModels(await api("/api/models"));
+        break;
+      }
+      if (modelArg.toLowerCase() === "current") {
+        const currentModel = (await api("/api/models")).current;
+        console.log(`Provider: ${currentModel.provider || "none"}`);
+        console.log(`Model:    ${currentModel.model || "none"}`);
+        console.log(`Source:   ${currentModel.source}`);
+        break;
+      }
+      if (modelArg.toLowerCase() === "reset") {
+        const result = await api("/api/models/reset", { method: "POST" });
+        console.log(
+          c(
+            C.green,
+            `Model reset: ${result.current.provider} / ${result.current.model}`,
+          ),
+        );
+        break;
+      }
+      const ref = parseModelRef(modelArg.replace(/^use\s+/i, ""));
+      if (!ref) {
+        const result = await api("/api/models", {
+          method: "PUT",
+          body: JSON.stringify({ reference: modelArg.replace(/^use\s+/i, "") }),
+        });
+        console.log(
+          c(
+            C.green,
+            `Model changed: ${result.current.provider} / ${result.current.model}`,
+          ),
+        );
+        break;
+      }
+      const result = await api("/api/models", {
+        method: "PUT",
+        body: JSON.stringify(ref),
+      });
+      console.log(
+        c(
+          C.green,
+          `Model changed: ${result.current.provider} / ${result.current.model}`,
+        ),
+      );
+      break;
+    }
     case "/help": {
       console.log(c(C.cyan, "Commands"));
       for (const [k, v] of [
@@ -633,10 +862,17 @@ async function runCommand(line) {
         ["/list", "recent experiments"],
         ["/cancel [id]", "cancel a running experiment"],
         ["/delete <id>", "delete an experiment"],
+        ["/export [path]", "export the entire active conversation as Markdown"],
+        ["/copy", "copy the entire active conversation to the clipboard"],
         ["/connect [path]", "connect a folder as a project (defaults to cwd)"],
         ["/projects", "list projects"],
         ["/project <id|name>", "set active project for new tasks"],
         ["/skills", "list available skills"],
+        ["/model", "select AI model"],
+        ["/model list", "list available models"],
+        ["/model current", "show current model"],
+        ["/model use <model>", "switch model"],
+        ["/model reset", "restore default model"],
       ]) {
         console.log(`  ${c(C.bold, k.padEnd(16))} ${v}`);
       }
@@ -751,7 +987,6 @@ async function collectInput(initial) {
 }
 
 async function main() {
-                     
   const args = argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
     printHelp();
@@ -767,11 +1002,11 @@ async function main() {
     return;
   }
 
-                                                         
   const taskArgs = args.filter((a) => !a.startsWith("-") && a !== "tui");
   if (taskArgs.length) {
     printBanner();
     await checkHealth();
+    wsConnect();
     await refreshProjects();
     watchCtrl.stop = false;
     const task = taskArgs.join(" ");
@@ -785,7 +1020,6 @@ async function main() {
     return;
   }
 
-                                                                                
   if (!args.includes("--classic")) {
     const { runTui } = await import("./tui.js");
     await runTui();
@@ -794,9 +1028,9 @@ async function main() {
 
   printBanner();
   await checkHealth();
+  wsConnect();
   await refreshProjects();
 
-                             
   while (true) {
     let line;
     try {
@@ -826,8 +1060,6 @@ rl.on("SIGINT", () => {
   watchCtrl.stop = true;
 });
 
-                                                              
-
 const FRONTEND_DIR = path.join(PROJECT_ROOT, "frontend");
 const FRONTEND_PROD = path.join(PROJECT_ROOT, "frontend", "dist");
 
@@ -856,12 +1088,11 @@ async function serve(mode) {
   const children = [];
   let backendAlreadyRunning = await isBackendRunning();
 
-                                         
   if (backendAlreadyRunning) {
     console.log(c(C.green, "Backend already running on http://localhost:4000"));
   } else {
     children.push(startProcess("backend", "node", ["server.js"], BACKEND_DIR));
-                                   
+
     console.log(c(C.dim, "Waiting for backend..."));
     const ok = await waitForBackend(15000);
     if (!ok) {
@@ -872,9 +1103,7 @@ async function serve(mode) {
     console.log(c(C.green, "Backend is up on http://localhost:4000"));
   }
 
-                   
   if (mode === "build") {
-                                   
     children.push(
       startProcess("frontend", "npm", ["run", "build"], FRONTEND_DIR),
     );
@@ -889,7 +1118,6 @@ async function serve(mode) {
       ),
     );
   } else {
-                         
     children.push(
       startProcess("frontend", "npm", ["run", "dev"], FRONTEND_DIR),
     );
@@ -904,7 +1132,6 @@ async function serve(mode) {
   console.log(c(C.dim, "  Press Ctrl+C to stop all processes"));
   console.log("");
 
-                            
   process.on("SIGINT", () => {
     console.log(c(C.yellow, "\nShutting down..."));
     for (const ch of children) {

@@ -1,20 +1,3 @@
-                                                              
-  
-             
-                                                              
-                                                     
-                                                  
-                                                  
-                                                                
-                                        
-  
-         
-                                        
-                                                                          
-                                         
-                                              
-                                                           
-
 import { routeTask, listSkills } from "./skills/index.js";
 
 const PLANNING_SYSTEM = `You are Hermes Brain — the reasoning layer of an AI developer assistant. Your job is to analyze a user's task and create a plan for solving it.
@@ -61,8 +44,24 @@ Rules:
 - Plain language, no emojis
 `;
 
+function isCasualTask(task) {
+  const text = String(task || "")
+    .trim()
+    .toLowerCase();
+  return /^(hi|hello|hey|yo|yoo|kamusta|kumusta|halo|good (morning|afternoon|evening)|salamat|thanks|thank you|who are you|what can you do|how are you|i don't know|idk|go)[?!. ,]*$/i.test(
+    text,
+  );
+}
+
 export class Brain {
-  constructor({ callAI, project, memoryText, trustLevel, brainstormConfig, imageDataUrl }) {
+  constructor({
+    callAI,
+    project,
+    memoryText,
+    trustLevel,
+    brainstormConfig,
+    imageDataUrl,
+  }) {
     this.callAI = callAI;
     this.project = project;
     this.memoryText = memoryText;
@@ -71,10 +70,6 @@ export class Brain {
     this.imageDataUrl = imageDataUrl;
   }
 
-     
-                               
-                                        
-     
   async plan(task) {
     const skills = listSkills();
     const context = {
@@ -84,10 +79,8 @@ export class Brain {
       hasImage: !!this.imageDataUrl,
     };
 
-                                                
     const routed = routeTask(task, context);
 
-                                          
     const planningContext = `
 Available skills:
 ${skills.map((s) => `- ${s.name}: ${s.description} (priority: ${s.priority}, tools: ${s.tools.join(", ")})`).join("\n")}
@@ -101,23 +94,25 @@ ${this.memoryText ? `Memory available: yes (${this.memoryText.length} chars)` : 
     try {
       const result = await this.callAI([
         { role: "system", content: PLANNING_SYSTEM },
-        { role: "user", content: `Task: ${task}\n\nContext:\n${planningContext}` },
+        {
+          role: "user",
+          content: `Task: ${task}\n\nContext:\n${planningContext}`,
+        },
       ]);
 
       const plan = this.parseJson(result.content);
 
-                                                        
       if (routed && plan.skill === routed.skill.name) {
         plan.confidence = Math.min(100, (plan.confidence || 50) + 15);
       }
 
-                                             
       plan._routedSkill = routed?.skill || null;
 
       return plan;
     } catch (err) {
-                                              
-      console.log(`[brain] Planning failed, using router fallback: ${err.message}`);
+      console.log(
+        `[brain] Planning failed, using router fallback: ${err.message}`,
+      );
       return {
         understanding: task,
         skill: routed?.skill?.name || "general",
@@ -131,14 +126,13 @@ ${this.memoryText ? `Memory available: yes (${this.memoryText.length} chars)` : 
     }
   }
 
-     
-                                                                        
-     
   async execute(plan, task) {
     const SkillClass = plan._routedSkill;
 
     if (SkillClass) {
-      console.log(`[brain] Routing to skill: ${SkillClass.name} (confidence: ${plan.confidence}%)`);
+      console.log(
+        `[brain] Routing to skill: ${SkillClass.name} (confidence: ${plan.confidence}%)`,
+      );
       const skill = new SkillClass();
       return skill.execute(task, {
         callAI: this.callAI,
@@ -151,16 +145,18 @@ ${this.memoryText ? `Memory available: yes (${this.memoryText.length} chars)` : 
       });
     }
 
-                                                    
     console.log(`[brain] No skill matched, using general execution`);
     return this.generalExecute(task, plan);
   }
 
-     
-                                                        
-     
   async generalExecute(task, plan) {
-    const system = `You are Hermes, an AI developer assistant. The user has a task for you.
+    const system = isCasualTask(task)
+      ? `You are Hermes, a friendly AI assistant. Reply directly to this simple conversational message in 1-3 sentences. Do not use headings or bullet lists. Answer in plain language (Taglish is fine). Never use emojis.
+
+${this.memoryText ? `Memory (from past sessions — use this):\n${this.memoryText}\n` : ""}
+Trust level: ${this.trustLevel || 1}.
+`
+      : `You are Hermes, an AI developer assistant. The user has a task for you.
 
 Respond EXACTLY in this structure — the sections and labels are parsed automatically:
 
@@ -200,20 +196,18 @@ ${this.project ? `The user has attached a project. Here is its structure:\n\nPro
     };
   }
 
-     
-                      
-                                        
-     
   async evaluate(result, task) {
     try {
       const evalResult = await this.callAI([
         { role: "system", content: EVALUATION_SYSTEM },
-        { role: "user", content: `Original task: ${task}\n\nResult:\n${(result.answer || "").slice(0, 3000)}\n\nFindings: ${(result.findings || []).join(", ")}` },
+        {
+          role: "user",
+          content: `Original task: ${task}\n\nResult:\n${(result.answer || "").slice(0, 3000)}\n\nFindings: ${(result.findings || []).join(", ")}`,
+        },
       ]);
 
       return this.parseJson(evalResult.content);
     } catch (err) {
-                                                  
       console.log(`[brain] Evaluation failed, assuming done: ${err.message}`);
       return {
         done: true,
@@ -226,27 +220,29 @@ ${this.project ? `The user has attached a project. Here is its structure:\n\nPro
     }
   }
 
-     
-                                                              
-     
   async process(task, maxReplans = 2) {
     let replans = 0;
     let lastResult = null;
     let lastPlan = null;
 
     while (replans <= maxReplans) {
-             
       lastPlan = await this.plan(task);
-      console.log(`[brain] Plan: skill=${lastPlan.skill}, confidence=${lastPlan.confidence}%, replan=${replans}`);
+      console.log(
+        `[brain] Plan: skill=${lastPlan.skill}, confidence=${lastPlan.confidence}%, replan=${replans}`,
+      );
 
-                
       lastResult = await this.execute(lastPlan, task);
 
-                 
       const evaluation = await this.evaluate(lastResult, task);
-      console.log(`[brain] Evaluation: done=${evaluation.done}, quality=${evaluation.quality}, replan=${evaluation.replanNeeded}`);
+      console.log(
+        `[brain] Evaluation: done=${evaluation.done}, quality=${evaluation.quality}, replan=${evaluation.replanNeeded}`,
+      );
 
-      if (evaluation.done || !evaluation.replanNeeded || replans >= maxReplans) {
+      if (
+        evaluation.done ||
+        !evaluation.replanNeeded ||
+        replans >= maxReplans
+      ) {
         return {
           plan: lastPlan,
           result: lastResult,
@@ -255,7 +251,6 @@ ${this.project ? `The user has attached a project. Here is its structure:\n\nPro
         };
       }
 
-                                                           
       replans++;
       if (evaluation.replanReason) {
         task = `${task}\n\n[Previous attempt failed: ${evaluation.replanReason}. Please try a different approach.]`;
@@ -265,7 +260,14 @@ ${this.project ? `The user has attached a project. Here is its structure:\n\nPro
     return {
       plan: lastPlan,
       result: lastResult,
-      evaluation: { done: true, quality: 50, satisfied: false, issues: ["Max replans reached"], nextSteps: [], replanNeeded: false },
+      evaluation: {
+        done: true,
+        quality: 50,
+        satisfied: false,
+        issues: ["Max replans reached"],
+        nextSteps: [],
+        replanNeeded: false,
+      },
       replans,
     };
   }
@@ -279,7 +281,8 @@ ${this.project ? `The user has attached a project. Here is its structure:\n\nPro
       .trim();
     const start = cleaned.indexOf("{");
     const end = cleaned.lastIndexOf("}");
-    if (start === -1 || end === -1) throw new Error("No JSON found in response");
+    if (start === -1 || end === -1)
+      throw new Error("No JSON found in response");
     return JSON.parse(cleaned.slice(start, end + 1));
   }
 
@@ -291,7 +294,9 @@ ${this.project ? `The user has attached a project. Here is its structure:\n\nPro
     for (const line of lines) {
       if (line.startsWith("# ") || line.trim() === "") continue;
       if (line.startsWith("## ")) {
-        inFindings = line.toLowerCase().includes("finding") || line.toLowerCase().includes("result");
+        inFindings =
+          line.toLowerCase().includes("finding") ||
+          line.toLowerCase().includes("result");
         continue;
       }
       if (inFindings) {

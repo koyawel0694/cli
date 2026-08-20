@@ -566,6 +566,23 @@
   border-left-color: var(--red);
 }
 
+.work-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.work-toggle:hover {
+  color: var(--text);
+}
+
 .exp-head {
   display: flex;
   align-items: center;
@@ -1368,6 +1385,88 @@ button.thinking-header:hover {
 .op-arrow {
   color: var(--accent);
   margin-right: 6px;
+}
+
+/* ── Tool call edit diff ───────────────────────────────── */
+
+.tool-call-item {
+  margin: 4px 0;
+}
+
+.tool-call-edit-header {
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  color: var(--faint);
+  padding: 3px 0;
+}
+
+.tool-call-path {
+  color: var(--dim);
+  margin-left: 4px;
+}
+
+.tool-call-diff {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 4px 0;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  line-height: 1.55;
+}
+
+.diff-line {
+  display: flex;
+  padding: 0 10px;
+  white-space: pre;
+}
+
+.diff-marker {
+  width: 18px;
+  flex-shrink: 0;
+  text-align: center;
+  font-weight: 600;
+  user-select: none;
+}
+
+.diff-content {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diff-remove {
+  background: rgba(220, 53, 69, 0.08);
+}
+
+.diff-remove .diff-marker {
+  color: #dc3545;
+}
+
+.diff-remove .diff-content {
+  color: var(--dim);
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.diff-add {
+  background: rgba(40, 167, 69, 0.08);
+}
+
+.diff-add .diff-marker {
+  color: #28a745;
+}
+
+.diff-add .diff-content {
+  color: var(--text);
+}
+
+.tool-call-error {
+  color: var(--danger, #dc3545);
+  font-size: 12px;
+  padding: 2px 0;
 }
 
 /* ── Reply bar (pinned bottom) ─────────────────────────── */

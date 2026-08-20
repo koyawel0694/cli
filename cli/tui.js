@@ -18,6 +18,7 @@ const C = {
   bold: "\x1b[1m",
   dim: "\x1b[2m",
   underline: "\x1b[4m",
+  strike: "\x1b[9m",
   red: "\x1b[31m",
   green: "\x1b[32m",
   yellow: "\x1b[33m",
@@ -28,6 +29,10 @@ const C = {
   orange: "\x1b[38;5;208m",
   purple: "\x1b[38;5;135m",
   gray: "\x1b[38;5;245m",
+  bgDark: "\x1b[48;5;235m",
+  bgMedium: "\x1b[48;5;236m",
+  bgLight: "\x1b[48;5;238m",
+  bgCode: "\x1b[48;5;233m",
 };
 const TTY = !!stdout.isTTY;
 const c = (codes, s) => {
@@ -64,6 +69,12 @@ const SLASH_COMMANDS = [
   { name: "sort", desc: "sort experiments", insert: "/sort " },
   { name: "cancel", desc: "cancel running task", insert: "/cancel " },
   { name: "delete", desc: "delete an experiment", insert: "/delete " },
+  {
+    name: "export",
+    desc: "export the entire conversation",
+    insert: "/export ",
+  },
+  { name: "copy", desc: "copy the entire conversation", insert: "/copy" },
   { name: "debug", desc: "force Debugging skill", insert: "/debug " },
   { name: "code", desc: "force Coding skill", insert: "/code " },
   { name: "research", desc: "force Research skill", insert: "/research " },
@@ -92,6 +103,7 @@ const SLASH_COMMANDS = [
   { name: "rollback", desc: "undo applied fix", insert: "/rollback" },
   { name: "undo", desc: "undo the last applied fix", insert: "/undo" },
   { name: "skills", desc: "list skills", insert: "/skills" },
+  { name: "model", desc: "select AI model", insert: "/model " },
   { name: "help", desc: "show help", insert: "/help" },
   { name: "quit", desc: "exit", insert: "/quit" },
 ];
@@ -146,7 +158,70 @@ export const state = {
   panelScroll: 0,
   slashScroll: 0,
   screenActive: false,
+  streamBuffer: "",
+  streamActive: false,
+  pasteCount: 0,
+  pasteDisplay: "",
+  modelCatalog: [],
+  modelCurrent: null,
+  modelSel: 0,
+  modelPreviousView: "chat",
+  showDetails: false,
 };
+
+const WS_URL = API.replace(/^http/, "ws") + "/ws";
+let ws = null;
+let wsConnected = false;
+let wsSubscriptions = new Set();
+let wsTokenCallback = null;
+
+function wsConnect() {
+  if (
+    ws &&
+    (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+  )
+    return;
+  try {
+    if (typeof WebSocket === "undefined") {
+      state.backendMsg = "WebSocket not supported (Node 22+ required)";
+      return;
+    }
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => {
+      wsConnected = true;
+      for (const id of wsSubscriptions) {
+        ws.send(JSON.stringify({ action: "subscribe", experimentId: id }));
+      }
+    };
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(String(event.data));
+        if (msg.type === "token" && wsTokenCallback) {
+          wsTokenCallback(msg.token);
+        }
+      } catch {}
+    };
+    ws.onclose = () => {
+      wsConnected = false;
+      setTimeout(wsConnect, 3000);
+    };
+    ws.onerror = () => {};
+  } catch {}
+}
+
+function wsSubscribe(expId) {
+  wsSubscriptions.add(expId);
+  if (wsConnected && ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: "subscribe", experimentId: expId }));
+  }
+}
+
+function wsUnsubscribe(expId) {
+  wsSubscriptions.delete(expId);
+  if (wsConnected && ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: "unsubscribe", experimentId: expId }));
+  }
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -158,6 +233,64 @@ async function api(p, opts = {}) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
   return body;
+}
+
+function conversationText(exp) {
+  const messages = exp?.messages?.length
+    ? exp.messages
+    : [
+        { role: "user", content: exp?.task || "" },
+        ...(exp?.answer ? [{ role: "assistant", content: exp.answer }] : []),
+      ];
+  const lines = [`# Hermes Conversation #${exp?.id || "unknown"}`, ""];
+  for (const message of messages) {
+    const role = message.role === "assistant" ? "Hermes" : "You";
+    lines.push(`## ${role}`, "", String(message.content || ""), "");
+  }
+  return lines.join("\n").trim() + "\n";
+}
+
+async function copyToClipboard(text) {
+  if (process.platform !== "win32") return false;
+  return new Promise((resolve) => {
+    const child = spawn(
+      "powershell",
+      ["-NoProfile", "-Command", "$input | Set-Clipboard"],
+      {
+        stdio: ["pipe", "ignore", "ignore"],
+        windowsHide: true,
+      },
+    );
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+    child.stdin.end(text);
+  });
+}
+
+async function exportConversation(arg = "") {
+  if (!state.exp?.id) {
+    state.status = "No active conversation. Run a task or /open <id> first.";
+    return;
+  }
+  const exp = await api(`/api/experiments/${state.exp.id}`);
+  const text = conversationText(exp);
+  const target = arg
+    ? path.resolve(arg)
+    : path.resolve(`hermes-conversation-${exp.id}.md`);
+  await fsPromises.writeFile(target, text, "utf8");
+  state.status = `Conversation exported to ${target}`;
+}
+
+async function copyConversation() {
+  if (!state.exp?.id) {
+    state.status = "No active conversation. Run a task or /open <id> first.";
+    return;
+  }
+  const exp = await api(`/api/experiments/${state.exp.id}`);
+  const copied = await copyToClipboard(conversationText(exp));
+  state.status = copied
+    ? "Entire conversation copied to the clipboard."
+    : "Clipboard is unavailable on this system; use /export [path] instead.";
 }
 
 const timeAgo = (ts) => {
@@ -203,7 +336,7 @@ function modelInfo(exp, sep = " · ") {
       : state.trustLevel === 2
         ? "auto"
         : "suggest";
-  return `Build${sep}${model}${sep}${skill}${sep}${trust}`;
+  return `${model}${sep}${skill}${sep}${trust}`;
 }
 
 const ANSI_ESCAPE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
@@ -230,8 +363,10 @@ function wrap(text, width) {
   for (const raw of String(text).split("\n")) {
     let line = raw;
     while (line.length > width) {
-      out.push(line.slice(0, width));
-      line = line.slice(width);
+      const breakAt = line.lastIndexOf(" ", width);
+      const cut = breakAt > 0 ? breakAt : width;
+      out.push(line.slice(0, cut).trimEnd());
+      line = line.slice(cut).trimStart();
     }
     out.push(line);
   }
@@ -281,10 +416,24 @@ function logoBlock(w) {
   });
 }
 
+function boxTop(label, w) {
+  const prefix = `  ┌─ ${label} `;
+  return truncateAssemble(w, [
+    [C.dim, prefix + "─".repeat(Math.max(1, w - prefix.length - 1)) + "┐"],
+  ]);
+}
+
+function boxBottom(w) {
+  return truncateAssemble(w, [
+    [C.dim, "  └" + "─".repeat(Math.max(1, w - 4)) + "┘"],
+  ]);
+}
+
 function headerBlock(w) {
-  const lines = logoBlock(w);
-  lines.push(centeredLine(w, "AI Experiment & Developer Assistant", [C.dim]));
-  return lines;
+  return LOGO.map((row) => {
+    const pad = Math.max(0, Math.floor((w - row.length) / 2));
+    return c(C.cyan, " ".repeat(pad) + row);
+  });
 }
 
 function tabBar(w) {
@@ -295,18 +444,32 @@ function tabBar(w) {
     ["skills", "Skills"],
     ["help", "Help"],
   ];
-  const parts = [[C.dim, "  "]];
-  tabs.forEach(([view, label], i) => {
+  const tabTexts = tabs.map(([view, label]) => ({
+    view,
+    label,
+    text: state.view === view ? `[ ${label} ]` : label,
+  }));
+  const leading = 2;
+  const trailing = 3;
+  const totalText = tabTexts.reduce((sum, tab) => sum + tab.text.length, 0);
+  const remaining = Math.max(0, w - leading - trailing - totalText);
+  const baseGap = Math.floor(remaining / (tabs.length - 1));
+  const extraGap = remaining % (tabs.length - 1);
+  const parts = [[C.dim, " ".repeat(leading)]];
+  tabTexts.forEach((tab, i) => {
+    const { view, label, text } = tab;
     const active = state.view === view;
     parts.push(
+      [active ? [C.cyan, C.bold] : C.gray, text],
       [
-        active ? [C.cyan, C.bold] : C.gray,
-        (active ? "[ " : "  ") + label + (active ? " ]" : "  "),
+        C.dim,
+        i < tabs.length - 1
+          ? " ".repeat(baseGap + (i === tabs.length - 2 ? extraGap : 0))
+          : "",
       ],
-      [C.dim, i < tabs.length - 1 ? "  " : ""],
     );
   });
-  parts.push([C.dim, "  Tab: next section"]);
+  parts.push([C.dim, " ".repeat(trailing)]);
   return truncateAssemble(w, parts);
 }
 
@@ -331,10 +494,47 @@ function panelTabs(w) {
   return truncateAssemble(w, parts);
 }
 
+let pasteMode = false;
+let pasteBuffer = "";
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+
 function parseKeys(buf) {
   const s = buf.toString("utf8");
   const keys = [];
-  for (let i = 0; i < s.length; i++) {
+  let i = 0;
+  while (i < s.length) {
+    if (pasteMode) {
+      const end = s.indexOf(BRACKETED_PASTE_END, i);
+      if (end < 0) {
+        pasteBuffer += s.slice(i);
+        break;
+      }
+      pasteBuffer += s.slice(i, end);
+      keys.push(`paste:${pasteBuffer}`);
+      pasteBuffer = "";
+      pasteMode = false;
+      i = end + BRACKETED_PASTE_END.length;
+      continue;
+    }
+    if (s.startsWith(BRACKETED_PASTE_START, i)) {
+      pasteMode = true;
+      i += BRACKETED_PASTE_START.length;
+      continue;
+    }
+    if (s.startsWith("\x1b[<", i)) {
+      const end = s.slice(i).search(/[mM]/);
+      if (end >= 0) {
+        const match = s
+          .slice(i, i + end + 1)
+          .match(/^\x1b\[<(\d+);(\d+);(\d+)[mM]$/);
+        if (match && match[1] === "0" && s[i + end] === "M") {
+          keys.push(`click:${match[2]}:${match[3]}`);
+        }
+        i += end + 1;
+        continue;
+      }
+    }
     const ch = s[i];
     if (ch === "\x1b") {
       if (s[i + 1] === "[" && s[i + 2]) {
@@ -351,6 +551,18 @@ function parseKeys(buf) {
         } else if (code === "D") {
           keys.push("left");
           i += 2;
+        } else if (code === "5" && s[i + 3] === "~") {
+          keys.push("pageup");
+          i += 3;
+        } else if (code === "6" && s[i + 3] === "~") {
+          keys.push("pagedown");
+          i += 3;
+        } else if (code === "H") {
+          keys.push("home");
+          i += 2;
+        } else if (code === "F") {
+          keys.push("end");
+          i += 2;
         } else {
           keys.push("escape");
           i += 1;
@@ -364,6 +576,7 @@ function parseKeys(buf) {
     else if (ch === "\x03") keys.push("ctrl-c");
     else if (ch === "\x04") keys.push("ctrl-d");
     else keys.push(ch);
+    i++;
   }
   return keys;
 }
@@ -444,6 +657,25 @@ async function loadProjects() {
 async function loadSkills() {
   const d = await api("/api/skills").catch(() => ({ skills: [] }));
   state.skills = d.skills || [];
+}
+async function loadModels() {
+  const d = await api("/api/models").catch(() => ({
+    models: [],
+    current: null,
+  }));
+  state.modelCatalog = d.models || [];
+  state.modelCurrent = d.current || null;
+}
+
+function modelOptions() {
+  return state.modelCatalog.flatMap((group) =>
+    group.models.map((model) => ({
+      provider: group.provider,
+      label: group.label,
+      model: model.name,
+      available: group.available?.available === true,
+    })),
+  );
 }
 async function loadProjectHealth() {
   if (!state.projectId) {
@@ -584,10 +816,26 @@ function thoughtFor(tool, args) {
 }
 function toolEntry(tool, args) {
   args = args || {};
-  if (tool === "read_file") return { mark: "→", text: `Read ${args.path}` };
+  if (tool === "read_file") {
+    const offset = Number(args.offset);
+    const limit = Number(args.limit);
+    const hasRange = Number.isFinite(offset) && Number.isFinite(limit) && limit > 0;
+    const start = Number.isFinite(offset) && offset >= 0 ? offset + 1 : 1;
+    const loc = hasRange
+      ? ` [lines ${start}-${start + limit - 1}]`
+      : args.offset
+        ? ` [starting line ${start}]`
+        : args.limit
+          ? ` [first ${args.limit} lines]`
+          : "";
+    return { mark: "→", text: `Read ${args.path}${loc}` };
+  }
   if (tool === "glob") return { mark: "*", text: `Glob "${args.pattern}"` };
-  if (tool === "search_files" || tool === "search")
-    return { mark: "*", text: `Search "${args.query}"` };
+  if (tool === "search_files" || tool === "search") {
+    const cwd = args.cwd ? ` in ${args.cwd}` : "";
+    const count = args.matchCount ? ` (${args.matchCount} matches)` : "";
+    return { mark: "*", text: `Grep "${args.query}"${cwd}${count}` };
+  }
   if (tool === "execute_command")
     return { mark: "$", text: args.command, cmd: true };
   if (tool === "git")
@@ -596,6 +844,16 @@ function toolEntry(tool, args) {
       text: `git ${args.operation}${args.message ? " " + args.message : ""}`.trim(),
       cmd: true,
     };
+  if (tool === "list_directory")
+    return { mark: "→", text: `List ${args.path || "."}` };
+  if (tool === "write_file")
+    return { mark: "$", text: `Write ${args.path}`, cmd: true };
+  if (
+    tool === "modify_file" ||
+    tool === "replace_in_file" ||
+    tool === "str_replace"
+  )
+    return { mark: "$", text: `Edit ${args.path}`, cmd: true };
   const rest = Object.values(args).join(" ").trim();
   return {
     mark: "→",
@@ -640,44 +898,155 @@ function skillBlock(s, w, lines) {
   lines.push("");
 }
 
+function renderEditDiff(t, w, body) {
+  const args = t.args || {};
+  const filePath = args.path || "file";
+
+  // Normalize replacements from different tool formats
+  const replacements = [];
+  if (args.replacements && Array.isArray(args.replacements)) {
+    // str_replace format: { path, replacements: [{ oldString, newString }] }
+    for (const r of args.replacements) {
+      replacements.push({
+        old: String(r.oldString ?? ""),
+        nw: String(r.newString ?? ""),
+      });
+    }
+  } else {
+    // modify_file / replace_in_file format: { path, from, to } or { path, old_str, new_str }
+    const old = String(args.from ?? args.old_str ?? "");
+    const nw = String(args.to ?? args.new_str ?? "");
+    if (old || nw) replacements.push({ old, nw });
+  }
+
+  if (!replacements.length) return;
+
+  const maxLines = 18;
+  const boxWidth = Math.max(1, w - 6);
+  const contentWidth = Math.max(1, boxWidth - 4);
+
+  const diffLine = (style, marker, line, removed) => {
+    const chunks = wrap(line, contentWidth - 2);
+    return chunks.map((chunk, ci) => {
+      const mk = ci === 0 ? marker : " ";
+      const content = `${mk} ${chunk}`.padEnd(contentWidth);
+      const rowStyle = removed ? [style, C.strike] : [style];
+      return truncateAssemble(w, [
+        [C.dim, "  │"],
+        [rowStyle, content],
+        [C.dim, "│"],
+      ]);
+    });
+  };
+
+  body.push("");
+  body.push(truncateAssemble(w, [[C.orange, C.bold], "  Preview"]));
+  body.push(
+    truncateAssemble(w, [
+      [[C.white, C.bold], "  \u2190 Edit "],
+      [C.dim, filePath],
+    ]),
+  );
+
+  const border = "─".repeat(boxWidth);
+  body.push(truncateAssemble(w, [[C.dim, `  ┌${border}┐`]]));
+
+  for (const { old, nw } of replacements) {
+    const before = old.split("\n");
+    const after = nw.split("\n");
+
+    before.slice(0, maxLines).forEach((line) => {
+      body.push(...diffLine(C.red, "-", line, true));
+    });
+    if (before.length > maxLines)
+      body.push(
+        truncateAssemble(w, [
+          [C.dim, `  │ … ${before.length - maxLines} old lines hidden`.padEnd(contentWidth + 2) + "│"],
+        ]),
+      );
+
+    after.slice(0, maxLines).forEach((line) => {
+      body.push(...diffLine(C.green, "+", line));
+    });
+    if (after.length > maxLines)
+      body.push(
+        truncateAssemble(w, [
+          [C.dim, `  │ … ${after.length - maxLines} new lines hidden`.padEnd(contentWidth + 2) + "│"],
+        ]),
+      );
+  }
+  body.push(truncateAssemble(w, [[C.dim, `  └${border}┘`]]));
+}
+
 function renderToolLog(calls, exp, w, body) {
-  const hidden = Math.max(0, calls.length - 12);
+  body.push("");
+  body.push(
+    truncateAssemble(w, [
+      [[C.orange, C.bold], "  ACTIVITY"],
+      [
+        C.dim,
+        `  ${calls.length} event${calls.length === 1 ? "" : "s"}  ` +
+          "─".repeat(Math.max(1, w - 23)),
+      ],
+    ]),
+  );
+  const hidden = Math.max(0, calls.length - 15);
   if (hidden) {
     body.push(
       truncateAssemble(w, [[C.dim, `  … ${hidden} earlier tool calls hidden`]]),
     );
   }
-  calls.slice(-12).forEach((t) => {
+  const B = C.bgDark;
+  const visibleCalls = calls.slice(-15);
+  visibleCalls.forEach((t) => {
+    if (
+      t.name === "modify_file" ||
+      t.name === "replace_in_file" ||
+      t.name === "str_replace"
+    ) {
+      renderEditDiff(t, w, body);
+      return;
+    }
     const e = toolEntry(t.name, t.args);
     if (e.cmd) {
-      const label = /\b(?:powershell|pwsh)(?:\.exe)?\b/i.test(String(e.text))
-        ? "PowerShell"
-        : "Command";
+      const cmdText = String(e.text).replace(/\s+/g, " ");
       body.push(
         truncateAssemble(w, [
-          [
-            [t.error ? C.red : C.cyan, C.bold],
-            `  ${t.error ? "!" : "→"} ${label}`,
-          ],
-          [C.dim, `  ${String(e.text).replace(/\s+/g, " ")}`],
+          [[C.orange, B], "  $ "],
+          [[C.white, B], cmdText],
         ]),
       );
       if (t.error)
         body.push(
           truncateAssemble(w, [
-            [C.red, `    ${String(t.error).slice(0, Math.max(20, w - 8))}`],
+            [
+              [C.red, B],
+              `    ${String(t.error).slice(0, Math.max(20, w - 8))}`,
+            ],
           ]),
         );
     } else {
       body.push(
         truncateAssemble(w, [
-          [C.cyan, "  " + e.mark + " "],
-          [C.dim, e.text],
+          [[C.orange, B], "  " + e.mark + " "],
+          [[C.white, B], e.text],
         ]),
       );
-      if (t.error) body.push(truncateAssemble(w, [[C.red, "  ! " + t.error]]));
+      if (t.error)
+        body.push(truncateAssemble(w, [[[C.red, B], "    ! " + t.error]]));
     }
   });
+}
+
+function thoughtTiming(exp, w, body) {
+  if (exp.status !== "running") return;
+  const startTime = exp.createdAt || Date.now();
+  const elapsedMs = Date.now() - startTime;
+  if (elapsedMs < 200) return;
+  const elapsedLabel =
+    elapsedMs < 1000 ? `${elapsedMs}ms` : `${(elapsedMs / 1000).toFixed(1)}s`;
+  body.push(truncateAssemble(w, [[C.orange, "+ Thought: " + elapsedLabel]]));
+  body.push("");
 }
 
 function pipelineBlock(exp, w, body) {
@@ -692,76 +1061,397 @@ function pipelineBlock(exp, w, body) {
       ],
     ]),
   );
-  const done = new Set(exp.progress || []);
-  PIPELINE.forEach((step, i) => {
-    const isDone = done.has(step);
-    const isCurrent = !isDone && (i === 0 || done.has(PIPELINE[i - 1]));
-    body.push(
-      "      " +
-        (isDone
-          ? c(C.green, "✓")
-          : isCurrent
-            ? c(C.yellow, "▸")
-            : c(C.dim, "·")) +
-        "  " +
-        step,
-    );
-  });
+}
+
+function highlightCode(line, lang) {
+  const L = (lang || "").toLowerCase();
+  const segments = [];
+  let i = 0;
+  const push = (style, text) => {
+    if (text) segments.push([style, text]);
+  };
+
+  // Keywords per language family
+  const kw = {
+    js: /^(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|this|class|extends|import|export|from|default|async|await|try|catch|finally|throw|typeof|instanceof|in|of|yield|delete|void|super|static|get|set)\b/,
+    ts: /^(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|this|class|extends|import|export|from|default|async|await|try|catch|finally|throw|typeof|instanceof|in|of|yield|type|interface|enum|namespace|abstract|implements|readonly|private|protected|public|static|as|is|keyof|never|unknown|any|void|null|undefined|true|false)\b/,
+    py: /^(def|class|return|if|elif|else|for|while|break|continue|import|from|as|try|except|finally|raise|with|yield|lambda|and|or|not|in|is|True|False|None|self|async|await|pass|del|global|nonlocal|assert)\b/,
+    rb: /^(def|class|return|if|elsif|else|unless|for|while|do|break|continue|begin|rescue|ensure|end|require|require_relative|include|extend|module|yield|self|true|false|nil|raise|and|or|not|in|unless|case|when)\b/,
+    go: /^(func|return|if|else|for|range|break|continue|switch|case|default|var|const|type|struct|interface|package|import|defer|go|chan|select|map|make|new|append|len|cap|true|false|nil)\b/,
+    rs: /^(fn|let|mut|return|if|else|for|while|loop|break|continue|match|use|mod|pub|struct|enum|impl|trait|type|self|Self|true|false|where|async|await|move|ref|dyn|static|const|super|crate|as)\b/,
+    css: /^(color|background|background-color|border|margin|padding|display|font|width|height|position|top|left|right|bottom|flex|grid|gap|opacity|transition|transform|animation|overflow|z-index|text-align|line-height|box-shadow|border-radius|max|min|content|cursor|justify|align-items)\b/,
+    html: /^(div|span|p|a|img|ul|ol|li|h[1-6]|table|tr|td|th|form|input|button|select|option|textarea|section|article|aside|header|footer|nav|main|figure|figcaption|video|audio|source|canvas|svg|path|script|style|link|meta|title|head|body|html)\b/,
+    java: /^(public|private|protected|static|final|abstract|class|interface|extends|implements|new|return|if|else|for|while|do|switch|case|break|continue|try|catch|finally|throw|throws|void|int|long|double|float|boolean|char|String|byte|short|import|package|this|super|true|false|null|enum|record|sealed|permits|var|yield|instanceof)\b/,
+    shell:
+      /^(if|then|else|elif|fi|for|while|do|done|case|esac|function|return|exit|echo|cd|ls|pwd|grep|sed|awk|cat|chmod|mkdir|rm|cp|mv|export|source|local|readonly|declare|unset|set|unset|trap|eval|exec|test|true|false)\b/,
+  };
+
+  // Detect language family
+  let family = "generic";
+  if (
+    L === "js" ||
+    L === "jsx" ||
+    L === "mjs" ||
+    L === "cjs" ||
+    L === "javascript"
+  )
+    family = "js";
+  else if (L === "ts" || L === "tsx" || L === "typescript") family = "ts";
+  else if (L === "py" || L === "python") family = "py";
+  else if (L === "rb" || L === "ruby") family = "rb";
+  else if (L === "go" || L === "golang") family = "go";
+  else if (L === "rs" || L === "rust") family = "rs";
+  else if (L === "css" || L === "scss" || L === "less") family = "css";
+  else if (L === "html" || L === "xml" || L === "svg") family = "html";
+  else if (L === "java") family = "java";
+  else if (L === "sh" || L === "bash" || L === "zsh" || L === "shell")
+    family = "shell";
+  else if (L === "json") family = "json";
+
+  const keywords = kw[family];
+
+  while (i < line.length) {
+    const rest = line.slice(i);
+
+    // Line comment
+    if (
+      (family === "js" ||
+        family === "ts" ||
+        family === "java" ||
+        family === "rs" ||
+        family === "go") &&
+      rest.startsWith("//")
+    ) {
+      push(C.dim, line.slice(i));
+      break;
+    }
+    if (
+      (family === "py" || family === "rb" || family === "shell") &&
+      rest[0] === "#"
+    ) {
+      push(C.dim, line.slice(i));
+      break;
+    }
+
+    // Block comment start
+    if (
+      (family === "js" ||
+        family === "ts" ||
+        family === "java" ||
+        family === "css") &&
+      rest.startsWith("/*")
+    ) {
+      const end = line.indexOf("*/", i + 2);
+      if (end >= 0) {
+        push(C.dim, line.slice(i, end + 2));
+        i = end + 2;
+      } else {
+        push(C.dim, line.slice(i));
+        break;
+      }
+      continue;
+    }
+
+    // Strings
+    if (rest[0] === '"' || rest[0] === "'") {
+      const q = rest[0];
+      let j = 1;
+      while (j < rest.length && rest[j] !== q) {
+        if (rest[j] === "\\") j++;
+        j++;
+      }
+      j = Math.min(j + 1, rest.length);
+      push(C.green, line.slice(i, i + j));
+      i += j;
+      continue;
+    }
+
+    // Template literal (JS/TS)
+    if ((family === "js" || family === "ts") && rest[0] === "`") {
+      let j = 1;
+      while (j < rest.length && rest[j] !== "`") {
+        if (rest[j] === "\\") j++;
+        j++;
+      }
+      j = Math.min(j + 1, rest.length);
+      push(C.green, line.slice(i, i + j));
+      i += j;
+      continue;
+    }
+
+    // HTML tags
+    if (family === "html" && rest[0] === "<") {
+      const tagMatch = rest.match(/^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)/);
+      if (tagMatch) {
+        push(C.cyan, line.slice(i, i + tagMatch[0].length));
+        i += tagMatch[0].length;
+        continue;
+      }
+    }
+
+    // HTML attribute value after =
+    if (family === "html" && rest.match(/^[a-zA-Z-]+=/)) {
+      const attrMatch = rest.match(/^([a-zA-Z-]+)(=)/);
+      if (attrMatch) {
+        push(C.yellow, attrMatch[1]);
+        push(C.white, attrMatch[2]);
+        i += attrMatch[0].length;
+        continue;
+      }
+    }
+
+    // CSS selector (lines starting with . or # or a tag name)
+    if (family === "css" && (rest[0] === "." || rest[0] === "#")) {
+      const selMatch = rest.match(/^[.#][a-zA-Z_-][a-zA-Z0-9_-]*/);
+      if (selMatch) {
+        push(C.yellow, selMatch[0]);
+        i += selMatch[0].length;
+        continue;
+      }
+    }
+
+    // CSS property (word followed by colon)
+    if (family === "css" && rest.match(/^[a-z][a-z-]+\s*:/)) {
+      const propMatch = rest.match(/^([a-z][a-z-]+)(\s*:)/);
+      if (propMatch) {
+        push(C.cyan, propMatch[1]);
+        push(C.white, propMatch[2]);
+        i += propMatch[0].length;
+        continue;
+      }
+    }
+
+    // Numbers
+    if (rest[0] >= "0" && rest[0] <= "9") {
+      const numMatch = rest.match(/^[0-9]+(\.[0-9]+)?/);
+      if (numMatch) {
+        push(C.orange, numMatch[0]);
+        i += numMatch[0].length;
+        continue;
+      }
+    }
+
+    // Keywords
+    if (keywords) {
+      const kwMatch = rest.match(keywords);
+      if (kwMatch) {
+        // Make sure it's a whole word
+        const before = i > 0 ? line[i - 1] : " ";
+        const after = line[i + kwMatch[0].length] || " ";
+        if (!/[a-zA-Z0-9_]/.test(before) && !/[a-zA-Z0-9_]/.test(after)) {
+          push(C.cyan, kwMatch[0]);
+          i += kwMatch[0].length;
+          continue;
+        }
+      }
+    }
+
+    // JSON keys (word followed by colon)
+    if (family === "json" && rest.match(/^"[^"]+"\s*:/)) {
+      const keyMatch = rest.match(/^"([^"]+)"(\s*:)/);
+      if (keyMatch) {
+        push(C.cyan, '"' + keyMatch[1] + '"');
+        push(C.white, keyMatch[2]);
+        i += keyMatch[0].length;
+        continue;
+      }
+    }
+
+    // Default: just emit one char in white
+    push(C.white, rest[0]);
+    i++;
+  }
+  return segments;
 }
 
 function answerBlock(content, w, body) {
   let inCode = false;
+  let diffBlock = false;
+  let codeLang = "";
+  const B = C.bgDark;
+  const codeLine = (style, text) => {
+    const line = `  ${String(text || "")}`.slice(0, w).padEnd(w);
+    return assemble(w, [[style, line]]);
+  };
+  const highlightedCodeLine = (segs, maxWidth) => {
+    let out = "  ";
+    for (const [style, text] of segs) {
+      out += c(style, text);
+    }
+    return fitLine(out, maxWidth);
+  };
+  const codeLines = (style, text) =>
+    wrap(text, Math.max(1, w - 4)).map((line) => codeLine(style, line));
+  const codeBorder = (label = "CODE") =>
+    codeLine(
+      C.dim,
+      `\u250c\u2500 ${label} ${"\u2500".repeat(Math.max(1, w - label.length - 8))}\u2510`,
+    );
   for (const line of String(content || "").split("\n")) {
     const t = line.trim();
     if (t.startsWith("```")) {
+      diffBlock = /^```diff\s*$/i.test(t);
+      codeLang =
+        t
+          .replace(/^```\s*/, "")
+          .trim()
+          .toLowerCase() || "";
+      const label = (codeLang || "CODE").toUpperCase();
+      if (!inCode) {
+        body.push("");
+        body.push(codeBorder(label));
+      }
       inCode = !inCode;
-      body.push(truncateAssemble(w, [[C.dim, "  " + line]]));
+      if (!inCode) {
+        body.push(
+          codeLine(C.dim, `\u2514${"\u2500".repeat(Math.max(1, w - 3))}\u2518`),
+        );
+        body.push("");
+      }
       continue;
     }
     if (inCode) {
-      body.push(truncateAssemble(w, [[C.dim, "  " + line]]));
+      // Lines starting with +/- are diff markers
+      const isAdd = line.startsWith("+");
+      const isDel = line.startsWith("-");
+      if (diffBlock || isAdd || isDel) {
+        if (isAdd || isDel) {
+          // Colored +/- marker + syntax-highlighted rest
+          const marker = isAdd ? "+" : "-";
+          const markerColor = isAdd ? C.green : C.red;
+          const rest = line.slice(1);
+          const restSegs = codeLang
+            ? highlightCode(rest, codeLang)
+            : [[C.white, rest]];
+          body.push(
+            assemble(w, [
+              [C.dim, "  "],
+              [markerColor, marker + " "],
+              ...restSegs,
+            ]),
+          );
+        } else {
+          // Plain diff block line (no +/- prefix)
+          const color = line.startsWith("+")
+            ? C.green
+            : line.startsWith("-")
+              ? C.red
+              : C.white;
+          body.push(...codeLines(color, line));
+        }
+      } else if (codeLang) {
+        // Syntax-highlighted code
+        const segs = highlightCode(line, codeLang);
+        body.push(highlightedCodeLine(segs, w));
+      } else {
+        body.push(...codeLines(C.white, line));
+      }
       continue;
     }
     if (/^#{1,3}\s/.test(t)) {
       body.push(
-        truncateAssemble(w, [[C.bold, "  " + t.replace(/^#+\s*/, "")]]),
+        truncateAssemble(w, [[[C.bold, B], "  " + t.replace(/^#+\s*/, "")]]),
       );
       continue;
     }
     if (/^[-*]\s+/.test(t)) {
-      body.push(
-        truncateAssemble(w, [
-          [C.white, "  • " + t.replace(/^[-*]\s+/, "").replace(/\*\*/g, "")],
-        ]),
-      );
+      const content = t.replace(/^[-*]\s+/, "").replace(/\*\*/g, "");
+      const checkboxMatch = content.match(/^(\[[ x•]\]\s*)(.+)$/i);
+      if (checkboxMatch) {
+        const isChecked = /[x•]/i.test(checkboxMatch[1]);
+        const checkColor = isChecked ? C.orange : C.dim;
+        body.push(
+          truncateAssemble(w, [
+            [[checkColor, B], "  " + checkboxMatch[1]],
+            [[isChecked ? C.white : C.dim, B], checkboxMatch[2]],
+          ]),
+        );
+      } else {
+        body.push(truncateAssemble(w, [[[C.white, B], "  \u2022 " + content]]));
+      }
       continue;
     }
     if (t === "") {
       if (body.length && body[body.length - 1] !== "") body.push("");
       continue;
     }
-    for (const l of wrap(line.replace(/\*\*/g, ""), w - 4)) body.push("  " + l);
+    for (const l of wrap(line.replace(/\*\*/g, ""), Math.max(20, w - 8)))
+      body.push(c([C.white, B], "  " + l));
   }
 }
 
-function renderMessage(m, w, body) {
+function renderMessage(m, w, body, compact = false) {
   body.push("");
   if (m.role === "assistant") {
-    body.push(
-      truncateAssemble(w, [
-        [[C.green, C.bold], "  HERMES"],
-        [C.dim, "  ──"],
-      ]),
-    );
-    answerBlock(m.content, w, body);
+    if (compact) {
+      const lines = String(m.content || "").split("\n");
+      let code = null;
+      let previewCount = 0;
+      const codeBlocks = [];
+      const textWidth = Math.max(20, w - 8);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("```")) {
+          if (!code) {
+            code = {
+              language:
+                trimmed
+                  .replace(/^```\s*/, "")
+                  .trim()
+                  .toUpperCase() || "CODE",
+              count: 0,
+            };
+          } else {
+            codeBlocks.push(code);
+            code = null;
+          }
+          continue;
+        }
+        if (code) {
+          code.count++;
+          continue;
+        }
+        if (trimmed && previewCount < 4) {
+          for (const wrapped of wrap(
+            trimmed.replace(/^#{1,3}\s*/, ""),
+            textWidth,
+          )) {
+            body.push(truncateAssemble(w, [[C.white, "  " + wrapped]]));
+          }
+          previewCount++;
+        }
+      }
+      if (code) {
+        codeBlocks.push(code);
+      }
+      if (codeBlocks.length) {
+        const totalLines = codeBlocks.reduce(
+          (sum, block) => sum + block.count,
+          0,
+        );
+        const languages = [
+          ...new Set(codeBlocks.map((block) => block.language)),
+        ].join(", ");
+        const summary = `  ▸ CODE CHANGES · ${codeBlocks.length} block${codeBlocks.length === 1 ? "" : "s"} · ${totalLines} lines · ${languages} · click or Enter to expand`;
+        body.push(truncateAssemble(w, [[C.cyan, summary]]));
+      }
+      body.push(
+        truncateAssemble(w, [
+          [C.dim, "  … full response hidden · click or Enter to expand"],
+        ]),
+      );
+    } else {
+      body.push(
+        truncateAssemble(w, [[[C.green, C.bold, C.bgDark], "  \u2503 HERMES"]]),
+      );
+      answerBlock(m.content, w, body);
+    }
   } else {
     body.push(
-      truncateAssemble(w, [
-        [[C.cyan, C.bold], "  YOU"],
-        [C.dim, "  ──"],
-      ]),
+      truncateAssemble(w, [[[C.cyan, C.bold, C.bgDark], "  \u2503 YOU"]]),
     );
-    for (const l of wrap(m.content, w - 4)) body.push(c(C.white, "  " + l));
+    for (const l of wrap(m.content, w - 6))
+      body.push(c([C.white, C.bgDark], "  \u2503 " + l));
   }
 }
 
@@ -777,7 +1467,12 @@ function findingsBlock(exp, w, body) {
   body.push("");
   body.push(
     truncateAssemble(w, [
-      [C.dim, "  ── Findings " + "─".repeat(Math.max(1, w - 14))],
+      [[C.yellow, C.bold], "  FINDINGS"],
+      [
+        C.dim,
+        `  ${findings.length} item${findings.length === 1 ? "" : "s"}  ` +
+          "─".repeat(Math.max(1, w - 24)),
+      ],
     ]),
   );
   for (const f of findings.slice(0, 20)) {
@@ -887,53 +1582,131 @@ function chatBody(w, h) {
 
   for (const he of state.chatHistory) {
     body.push("");
-    for (const m of messagesOf(he)) renderMessage(m, w, body);
+    const compactHistory = !state.showDetails && he.status === "completed";
     const hcalls = toolCallsOf(he);
-    if (hcalls.length) renderToolLog(hcalls, he, w, body);
-    if (["completed", "failed", "cancelled"].includes(he.status)) {
-      findingsBlock(he, w, body);
-      body.push(
-        truncateAssemble(w, [
-          [C.dim, "  " + modelInfo(he) + " · " + elapsed(he)],
-        ]),
+    const historyMessages = messagesOf(he);
+    const lastAssistant = historyMessages.reduce(
+      (index, message, messageIndex) =>
+        message.role === "assistant" ? messageIndex : index,
+      -1,
+    );
+    historyMessages.forEach((message, messageIndex) => {
+      if (
+        messageIndex === lastAssistant &&
+        hcalls.length &&
+        (state.showDetails || he.status === "running")
+      ) {
+        renderToolLog(hcalls, he, w, body);
+      }
+      renderMessage(
+        message,
+        w,
+        body,
+        compactHistory && message.role === "assistant",
       );
+    });
+    if (
+      lastAssistant < 0 &&
+      hcalls.length &&
+      (state.showDetails || he.status === "running")
+    ) {
+      renderToolLog(hcalls, he, w, body);
+    }
+    if (
+      ["completed", "failed", "cancelled"].includes(he.status) &&
+      (state.showDetails || he.status !== "completed")
+    ) {
+      findingsBlock(he, w, body);
     }
   }
   if (state.chatHistory.length) body.push("");
 
-  for (const m of messagesOf(exp)) renderMessage(m, w, body);
-  if (exp.status === "running") {
-    body.push(
-      truncateAssemble(w, [
-        [[C.cyan, C.bold], "  ▣ " + modelInfo(exp)],
-        [C.dim, " · " + elapsed(exp)],
-      ]),
-    );
-    body.push(
-      truncateAssemble(w, [[C.dim, "  " + "─".repeat(Math.max(1, w - 4))]]),
-    );
-  }
+  const compact = !state.showDetails && exp.status === "completed";
+  const messages = messagesOf(exp);
+  const lastAssistant = messages.reduce(
+    (index, message, messageIndex) =>
+      message.role === "assistant" ? messageIndex : index,
+    -1,
+  );
   const calls = toolCallsOf(exp);
-  if (
+  const hasEdits = calls.some((call) =>
+    ["modify_file", "replace_in_file", "str_replace"].includes(call.name),
+  );
+  const showCalls =
     calls.length &&
     (exp.status === "running" ||
       exp.status === "completed" ||
-      exp.status === "failed")
-  ) {
-    if (exp.status !== "running") {
-      body.push("");
-      body.push(
-        truncateAssemble(w, [[C.dim, "  " + "─".repeat(Math.max(1, w - 4))]]),
-      );
+      exp.status === "failed") &&
+    (state.showDetails || exp.status === "running" || hasEdits);
+  messages.forEach((message, messageIndex) => {
+    if (messageIndex === lastAssistant && showCalls) {
+      if (state.showDetails) {
+        body.push("");
+        body.push(
+          truncateAssemble(w, [
+            [C.dim, "  \u2500".repeat(Math.min(Math.floor(w / 3), 40))],
+          ]),
+        );
+      }
+      renderToolLog(calls, exp, w, body);
     }
-    renderToolLog(calls, exp, w, body);
+    renderMessage(message, w, body, compact && message.role === "assistant");
+  });
+  if (lastAssistant < 0 && showCalls) renderToolLog(calls, exp, w, body);
+  if (exp.status === "running") {
+    thoughtTiming(exp, w, body);
   }
   const q = clarificationOf(exp);
   if (q && !state.qAnswered[exp.id]) questionsBlock(q, w, body);
-  if (exp.status === "running") pipelineBlock(exp, w, body);
+  if (exp.status === "running") {
+    pipelineBlock(exp, w, body);
+    if (state.streamActive && state.streamBuffer) {
+      body.push("");
+      body.push(
+        truncateAssemble(w, [
+          [[C.green, C.bold], "  HERMES"],
+          [C.dim, "  ──"],
+        ]),
+      );
+      const lines = state.streamBuffer.split("\n");
+      for (const line of lines) {
+        const t = line.trim();
+        if (t.startsWith("```")) {
+          body.push(truncateAssemble(w, [[C.dim, "  " + line]]));
+          continue;
+        }
+        if (/^#{1,3}\s/.test(t)) {
+          body.push(
+            truncateAssemble(w, [[C.bold, "  " + t.replace(/^#+\s*/, "")]]),
+          );
+          continue;
+        }
+        if (/^[-*]\s+/.test(t)) {
+          const content = t.replace(/^[-*]\s+/, "").replace(/\*\*/g, "");
+          const cbMatch = content.match(/^(\[[ x•]\]\s*)(.+)$/i);
+          if (cbMatch) {
+            const done = /[x•]/i.test(cbMatch[1]);
+            body.push(
+              truncateAssemble(w, [
+                [done ? C.orange : C.dim, "  " + cbMatch[1]],
+                [done ? C.white : C.dim, cbMatch[2]],
+              ]),
+            );
+          } else {
+            body.push(truncateAssemble(w, [[C.white, "  \u2022 " + content]]));
+          }
+          continue;
+        }
+        for (const l of wrap(line.replace(/\*\*/g, ""), Math.max(20, w - 8)))
+          body.push("  " + l);
+      }
+      body.push(truncateAssemble(w, [[C.dim, "  \u25b8 streaming..."]]));
+    }
+  }
   if (exp.status === "needs_approval") approvalBlock(exp, w, body);
   if (["completed", "failed", "cancelled"].includes(exp.status)) {
-    findingsBlock(exp, w, body);
+    if (state.showDetails || exp.status !== "completed")
+      findingsBlock(exp, w, body);
     if (exp.status === "failed")
       body.push(
         truncateAssemble(w, [[C.red, "  × " + (exp.error || "unknown error")]]),
@@ -945,6 +1718,16 @@ function chatBody(w, h) {
       );
     }
     if (exp.status !== "cancelled") {
+      body.push(
+        truncateAssemble(w, [
+          [
+            C.cyan,
+            state.showDetails
+              ? "  Enter or click hides task details"
+              : "  Enter or click shows full task details",
+          ],
+        ]),
+      );
       body.push("");
       body.push(
         truncateAssemble(w, [
@@ -1110,6 +1893,52 @@ function skillsBody(w, h) {
   return lines;
 }
 
+function modelBody(w, h) {
+  const options = modelOptions();
+  state.modelSel = Math.min(state.modelSel, Math.max(0, options.length - 1));
+  const lines = [
+    c(C.bold, "  # Select Model"),
+    truncateAssemble(w, [[C.dim, "  " + "─".repeat(Math.max(1, w - 4))]]),
+    "",
+  ];
+  if (state.modelCurrent?.model) {
+    lines.push(
+      truncateAssemble(w, [
+        [
+          C.green,
+          `  Current: ${state.modelCurrent.provider} / ${state.modelCurrent.model}`,
+        ],
+      ]),
+    );
+    lines.push("");
+  }
+  if (!options.length)
+    lines.push(truncateAssemble(w, [[C.dim, "  No configured models found."]]));
+  options.forEach((option, index) => {
+    const selected = index === state.modelSel;
+    const current =
+      state.modelCurrent?.provider === option.provider &&
+      state.modelCurrent?.model === option.model;
+    lines.push(
+      truncateAssemble(w, [
+        [selected ? [C.cyan, C.bold] : C.dim, selected ? "  ▸ " : "    "],
+        [
+          current ? C.green : C.white,
+          `${current ? "✓ " : "  "}${option.provider} / ${option.model}`,
+        ],
+        [C.dim, option.available ? "" : "  [not configured]"],
+      ]),
+    );
+  });
+  lines.push(
+    "",
+    truncateAssemble(w, [
+      [C.dim, "  W/S or ↑/↓ navigate · Enter select · Esc cancel"],
+    ]),
+  );
+  return lines;
+}
+
 function helpBody(w, h) {
   const rows = [];
   const add = (cmd, desc) =>
@@ -1132,6 +1961,8 @@ function helpBody(w, h) {
   add("/sort <newest|oldest|status>", "sort experiments");
   add("/cancel [id]", "cancel running task");
   add("/delete <id>", "delete an experiment");
+  add("/export [path]", "export the entire conversation as Markdown");
+  add("/copy", "copy the entire conversation to the clipboard");
   add("/connect [path]", "connect a folder");
   add("/projects", "list projects");
   add("/project <name>", "set active + default project");
@@ -1140,6 +1971,11 @@ function helpBody(w, h) {
   add("/trust <1|2|3>", "change autonomy level");
   add("/check", "show active project, trust and task status");
   add("/skills", "list skills");
+  add("/model", "select AI model");
+  add("/model list", "list available models");
+  add("/model current", "show current model");
+  add("/model use <model>", "switch model");
+  add("/model reset", "restore default model");
   add("/applyfix", "apply suggested fix");
   add("/rollback", "undo applied fix");
   add("/undo", "undo the last applied fix");
@@ -1157,7 +1993,10 @@ function helpBody(w, h) {
       [C.dim, "  Anything else becomes a task or follow-up."],
     ]),
   );
-  return rows;
+  const maxScroll = Math.max(0, rows.length - h);
+  state.scroll = Math.min(Math.max(0, state.scroll || 0), maxScroll);
+  const start = state.scroll;
+  return rows.slice(start, start + h);
 }
 
 function checkBody(w, h) {
@@ -1406,6 +2245,7 @@ function listBody(w, h) {
 function mainBody(w, h) {
   if (state.view === "projects") return projectsBody(w, h);
   if (state.view === "skills") return skillsBody(w, h);
+  if (state.view === "model") return modelBody(w, h);
   if (state.view === "help") return helpBody(w, h);
   if (state.view === "check") return checkBody(w, h);
   if (state.view === "history") return historyBody(w, h);
@@ -1464,8 +2304,8 @@ function panelOverlay(cols, bodyH) {
 
 function slashPopup(cols, maxRows = 10) {
   if (!state.slash?.list.length) return [];
-  const itemCount = Math.max(1, Math.min(6, maxRows - 5));
   const total = state.slash.list.length;
+  const itemCount = Math.max(1, Math.min(total, maxRows, 10));
   state.slash.sel = Math.min(Math.max(0, state.slash.sel), total - 1);
   const maxScroll = Math.max(0, total - itemCount);
   state.slashScroll = Math.min(Math.max(0, state.slashScroll || 0), maxScroll);
@@ -1477,139 +2317,114 @@ function slashPopup(cols, maxRows = 10) {
     state.slashScroll,
     state.slashScroll + itemCount,
   );
-  const query = state.input.match(/\/([a-zA-Z-]*)$/)?.[1] || "";
-  const itemLen = (it) => 5 + it.name.length + 2 + it.desc.length;
-  const boxW = Math.min(
-    cols - 8,
-    Math.max(40, Math.max(...items.map(itemLen)) + 4),
-  );
-  const left = Math.max(1, Math.floor((cols - boxW) / 2));
-  const line = (s) => {
-    const plain = plainText(s);
+  const popupW = Math.max(20, cols - 8);
+  const left = Math.max(2, Math.floor((cols - popupW) / 2));
+  const commandW = Math.min(18, Math.max(12, Math.floor(popupW * 0.22)));
+  const row = (content, selected) => {
+    const bg = selected ? C.bgLight : C.bgDark;
+    const prefix = " ".repeat(left);
+    const suffix = " ".repeat(Math.max(0, cols - left - popupW));
+    const command = (content.command || "").padEnd(commandW);
+    const description = String(content.description || "").slice(
+      0,
+      Math.max(1, popupW - commandW - 5),
+    );
+    const text = (" " + command + "  " + description).slice(0, popupW - 1);
+    const fill = " ".repeat(Math.max(0, popupW - 1 - text.length));
     return (
-      " ".repeat(left) + s + " ".repeat(Math.max(0, cols - left - plain.length))
+      prefix +
+      c([bg, selected ? C.orange : C.cyan], selected ? "▌" : " ") +
+      c([bg, selected ? C.white : C.cyan], text) +
+      c([bg, selected ? C.white : C.dim], fill) +
+      suffix
     );
   };
-  const popupRow = (text, style = C.gray) => {
-    const inner = plainText(text)
-      .slice(0, boxW - 4)
-      .padEnd(boxW - 4);
-    return line(c(style, "│ " + inner + " │"));
-  };
   const rows = [];
-  rows.push(
-    line(c(C.dim, "╭") + c(C.dim, "─".repeat(boxW - 2)) + c(C.dim, "╮")),
-  );
-  const title = `  COMMANDS  /${query}`;
-  rows.push(popupRow(title, [C.cyan, C.bold]));
-  rows.push(
-    line(c(C.dim, "│") + c(C.dim, "─".repeat(boxW - 2)) + c(C.dim, "│")),
-  );
   for (const [i, it] of items.entries()) {
     const index = state.slashScroll + i;
     const sel = index === state.slash.sel;
-    const inner = (sel ? "▸ " : "  ") + "/" + it.name.padEnd(14) + it.desc;
-    rows.push(popupRow(inner, sel ? [C.orange, C.bold] : C.gray));
+    rows.push(row({ command: "/" + it.name, description: it.desc }, sel));
   }
-  rows.push(popupRow("  ↑/↓ move · Enter · Esc close", C.gray));
-  rows.push(
-    line(c(C.dim, "╰") + c(C.dim, "─".repeat(boxW - 2)) + c(C.dim, "╯")),
-  );
   return rows;
 }
 
 function composerRows(cols) {
-  const CW = Math.max(10, Math.min(cols - 10, 80));
-  const left = Math.max(1, Math.floor((cols - CW) / 2));
-  const line = (s) =>
-    " ".repeat(left) + s + " ".repeat(Math.max(0, cols - left - s.length));
-  const fill = CW - 2;
+  state._composerRows = 5;
+  state._composerCaretOffset = 1;
+  const panelW = Math.min(Math.max(54, cols - 8), 1120);
+  const panelLeft = Math.max(0, Math.floor((cols - panelW) / 2));
+  const panelRight = Math.max(0, cols - panelLeft - panelW);
+  const accent = c([C.cyan, C.bgDark], "\u2588");
+  const panelLine = (content) =>
+    " ".repeat(panelLeft) + content + " ".repeat(panelRight);
   const rows = [];
-  rows.push(line(c(C.dim, "╭") + c(C.dim, "─".repeat(CW - 2)) + c(C.dim, "╮")));
   const placeholder = state.exp
     ? "Type a message..."
     : 'Ask anything... "Fix a TODO in the codebase"';
-  const maxIn = Math.max(4, CW - 8);
-  const visible =
-    state.input.length > maxIn
-      ? "…" + state.input.slice(state.input.length - maxIn + 1)
+  const maxIn = Math.max(4, panelW - 10);
+  const visible = state.pasteDisplay
+    ? state.pasteDisplay
+    : state.input.length > maxIn
+      ? "\u2026" + state.input.slice(state.input.length - maxIn + 1)
       : state.input;
   const text = visible || placeholder;
-  state._caretCol = left + 3 + visible.length;
-  const inputRow =
-    "│ " +
-    c(visible ? [] : C.dim, text) +
-    " ".repeat(Math.max(1, fill - 1 - text.length)) +
-    "│";
-  rows.push(line(inputRow));
-  const expStatus = state.exp?.status;
-  const status =
-    state.loading || expStatus === "running"
-      ? {
-          label: `${SPIN[Math.floor(Date.now() / 120) % SPIN.length]} WORKING`,
-          color: C.yellow,
-        }
-      : expStatus === "needs_approval"
-        ? { label: "! APPROVAL NEEDED", color: C.yellow }
-        : expStatus === "failed"
-          ? { label: "× FAILED · retry available", color: C.red }
-          : expStatus === "cancelled"
-            ? { label: "■ CANCELLED", color: C.yellow }
-            : expStatus === "completed"
-              ? { label: "✓ DONE · reply to continue", color: C.green }
-              : { label: "● READY", color: C.green };
+  state._caretCol = panelLeft + 6 + visible.length;
+  const innerW = panelW - 1;
+  const bg = C.bgDark;
+  const inputText = ("    " + text).slice(0, innerW).padEnd(innerW);
+  rows.push(panelLine(accent + c([bg], " ".repeat(innerW))));
   rows.push(
-    line(
-      "│ " +
-        " ".repeat(Math.max(1, fill - 1 - status.label.length)) +
-        c(status.color, status.label) +
-        "│",
-    ),
+    panelLine(accent + c(visible ? [C.white, bg] : [C.dim, bg], inputText)),
   );
-  const modelLine = state.exp
-    ? modelInfo(state.exp)
-    : "Build · DeepSeek V4 Flash Free · OpenCode Zen · max";
-  rows.push(
-    line(
-      "│ " +
-        c(C.gray, modelLine) +
-        " ".repeat(Math.max(1, fill - 1 - modelLine.length)) +
-        "│",
-    ),
-  );
-  rows.push(line(c(C.dim, "╰") + c(C.dim, "─".repeat(CW - 2)) + c(C.dim, "╯")));
+  rows.push(panelLine(accent + c([bg], " ".repeat(innerW))));
+  const trustLabel =
+    state.trustLevel === 3
+      ? "max"
+      : state.trustLevel === 2
+        ? "auto"
+        : "suggest";
+  const infoSegs = [
+    [C.green, "Build"],
+    [C.dim, " \u00b7 "],
+    [C.white, "DeepSeek V4 Flash Free"],
+    [C.dim, "  OpenCode Zen · "],
+    [C.orange, trustLabel],
+  ];
+  let infoText = "";
+  for (const [, t] of infoSegs) infoText += t;
+  const infoIndent = 4;
+  const infoRemaining = Math.max(0, innerW - infoIndent - infoText.length);
+  const infoSeg =
+    accent +
+    c([bg], " ".repeat(infoIndent)) +
+    infoSegs.map(([s, t]) => c([s, bg], t)).join("") +
+    c([bg], " ".repeat(infoRemaining));
+  rows.push(panelLine(infoSeg));
+  rows.push(panelLine(accent + c([bg], " ".repeat(innerW))));
   return rows;
 }
 
 function statusLine(cols) {
   const proj = state.projects.find((p) => p.id === state.projectId);
-  const left = [["", "│ "]];
-  if (proj) {
-    left.push(
-      [C.cyan, "project · " + proj.name],
-      [C.dim, "  " + (proj.path || "")],
-    );
-  } else {
-    left.push([
-      C.dim,
-      state.backendOk === false
-        ? "backend offline"
-        : "no project — /connect <path>",
-    ]);
-  }
-  const right = [];
-  right.push(
-    state.backendOk === false
-      ? [C.red, "backend ×"]
-      : state.backendOk === true
-        ? [C.green, "backend ●"]
-        : [C.dim, "backend …"],
-  );
-  right.push([C.dim, "  / to commands"]);
-  const leftRaw = left.reduce((a, [, t]) => a + t.length, 0);
-  const rightRaw = right.reduce((a, [, t]) => a + t.length, 0);
-  const gap = Math.max(2, cols - leftRaw - rightRaw);
-  return truncateAssemble(cols, [...left, ["", " ".repeat(gap)], ...right]);
+  const projPath = proj ? proj.path || "" : "";
+  const rightHint =
+    state.backendOk === false ? [C.red, "backend ×"] : [C.green, "backend ●"];
+  const leftText = projPath
+    ? projPath
+    : state.backendOk === false
+      ? "backend offline"
+      : "no project — /connect <path>";
+  const rightText = "ctrl+p commands";
+  const leftSegs = [[C.dim, leftText]];
+  const rightSegs = [rightHint, [C.dim, "  " + rightText]];
+  const leftLen = leftText.length;
+  const rightLen = (state.backendOk === false ? 10 : 10) + 2 + rightText.length;
+  const gap = Math.max(2, cols - leftLen - rightLen);
+  return truncateAssemble(cols, [
+    ...leftSegs,
+    ["", " ".repeat(gap)],
+    ...rightSegs,
+  ]);
 }
 
 export function buildScreen(rows, cols) {
@@ -1618,13 +2433,8 @@ export function buildScreen(rows, cols) {
   const headerH = header.length;
   const tabs = tabBar(cols);
   const bodyH = Math.max(2, rows - 6 - headerH - 2);
-  const body = mainBody(cols, bodyH).map((l) => l.slice(0, cols));
+  const body = mainBody(cols, bodyH).map((line) => fitLine(line, cols));
   while (body.length < bodyH) body.push("");
-  const popup = slashPopup(cols, bodyH);
-  if (popup.length) {
-    const start = Math.max(0, bodyH - popup.length);
-    for (let i = 0; i < popup.length; i++) body[start + i] = popup[i];
-  }
   if (state.status && body.length)
     body[0] = c(C.dim, String(state.status).slice(0, cols));
   const panel = panelOverlay(cols, bodyH);
@@ -1632,10 +2442,17 @@ export function buildScreen(rows, cols) {
     const top = Math.max(0, Math.floor((bodyH - panel.length) / 2));
     for (let i = 0; i < panel.length; i++) body[top + i] = panel[i];
   }
+  const popup = slashPopup(cols, bodyH);
+  if (popup.length) {
+    const start = Math.max(0, bodyH - popup.length);
+    for (let i = 0; i < popup.length; i++) body[start + i] = popup[i];
+  }
   out.push(...header);
   out.push(tabs);
   out.push(
-    truncateAssemble(cols, [[C.dim, "  " + "─".repeat(Math.max(1, cols - 4))]]),
+    truncateAssemble(cols, [
+      [C.dim, "  " + "\u2500".repeat(Math.max(1, cols - 4))],
+    ]),
   );
   out.push(...body);
   out.push(...composerRows(cols));
@@ -1652,7 +2469,7 @@ function renderFrame() {
   const out =
     "\x1b[?25l\x1b[2J\x1b[H" +
     lines.join("\n") +
-    `\x1b[${rows - 4};${caretCol}H\x1b[?25h`;
+    `\x1b[${lines.length - state._composerRows + (state._composerCaretOffset || 0)};${caretCol}H\x1b[?25h`;
   stdout.write(out);
 }
 
@@ -1703,27 +2520,6 @@ async function submitTask(raw) {
   state.questions = null;
   renderFrame();
   try {
-    if (state.exp) {
-      const prev = state.exp;
-      const msgs = prev.messages?.length ? [...prev.messages] : [];
-
-      if (!msgs.some((m) => m.role === "user") && prev.task) {
-        msgs.unshift({
-          role: "user",
-          content: prev.task,
-          createdAt: prev.createdAt,
-        });
-      }
-
-      if (!msgs.some((m) => m.role === "assistant") && prev.answer) {
-        msgs.push({
-          role: "assistant",
-          content: prev.answer,
-          createdAt: prev.completedAt,
-        });
-      }
-      if (msgs.length) state.chatHistory.push({ ...prev, messages: msgs });
-    }
     const body = { task };
     if (state.projectId) body.projectId = state.projectId;
     if (state.previousConversationId) {
@@ -1929,6 +2725,12 @@ async function runCommand(line) {
         state.status = `Deleted #${id}.`;
         break;
       }
+      case "/export":
+        await exportConversation(arg);
+        break;
+      case "/copy":
+        await copyConversation();
+        break;
       case "/connect": {
         const cp = path.normalize(arg ? path.resolve(arg) : process.cwd());
         let st;
@@ -2074,8 +2876,48 @@ async function runCommand(line) {
         await loadSkills();
         state.view = "skills";
         break;
+      case "/model": {
+        const modelArg = arg.trim();
+        await loadModels();
+        if (!modelArg || modelArg.toLowerCase() === "list") {
+          state.modelPreviousView = state.view;
+          state.view = "model";
+          state.modelSel = 0;
+          break;
+        }
+        if (modelArg.toLowerCase() === "current") {
+          const current = state.modelCurrent;
+          state.status = current?.model
+            ? `Current model: ${current.provider} / ${current.model} (${current.source})`
+            : "No current model configured.";
+          break;
+        }
+        if (modelArg.toLowerCase() === "reset") {
+          const result = await api("/api/models/reset", { method: "POST" });
+          state.modelCurrent = result.current;
+          state.status = `Model reset: ${result.current.provider} / ${result.current.model}`;
+          break;
+        }
+        const selection = modelArg.replace(/^use\s+/i, "");
+        const slash = selection.indexOf("/");
+        const body =
+          slash > 0 && slash < selection.length - 1
+            ? {
+                provider: selection.slice(0, slash),
+                model: selection.slice(slash + 1),
+              }
+            : { reference: selection };
+        const result = await api("/api/models", {
+          method: "PUT",
+          body: JSON.stringify(body),
+        });
+        state.modelCurrent = result.current;
+        state.status = `Model changed: ${result.current.provider} / ${result.current.model}`;
+        break;
+      }
       case "/help":
         state.view = "help";
+        state.scroll = 0;
         break;
       case "/check":
         await Promise.all([loadProjects(), loadSettings()]);
@@ -2130,6 +2972,30 @@ async function runCommand(line) {
 
 async function handleKey(k) {
   if (state.quitting) return;
+  if (k.startsWith("click:")) {
+    if (state.view === "chat" && state.exp?.status === "completed") {
+      const [, , y] = k.split(":").map(Number);
+      const headerRows = 3;
+      if (y > headerRows && y < (stdout.rows || 24) - 5) {
+        state.showDetails = !state.showDetails;
+        state.status = state.showDetails
+          ? "Full task details shown."
+          : "Task details minimized.";
+        state.follow = true;
+      }
+    }
+    return;
+  }
+  if (k.startsWith("paste:")) {
+    const pasted = k.slice("paste:".length).replace(/\r\n?/g, "\n").trimEnd();
+    if (!pasted) return;
+    state.input += pasted;
+    state.pasteCount += 1;
+    state.pasteDisplay = `[Pasted Text #${state.pasteCount}]`;
+    state.histIndex = -1;
+    state.slash = null;
+    return;
+  }
   if (k === "ctrl-c") {
     const e = state.exp;
     if (e && (e.status === "running" || e.status === "needs_approval"))
@@ -2154,13 +3020,19 @@ async function handleKey(k) {
     }
     if (k === "enter" || k === "tab") {
       const cmd = state.slash.list[state.slash.sel];
-      const m = state.input.match(/(^|\s)\/[a-zA-Z-]*$/);
-      if (m && cmd) {
-        state.input = state.input.slice(0, m.index + m[1].length) + cmd.insert;
-        state.histIndex = -1;
+      const exactCommand = cmd && state.input.trim() === cmd.insert.trim();
+      if (k === "enter" && exactCommand) {
+        state.slash = null;
+      } else {
+        const m = state.input.match(/(^|\s)\/[a-zA-Z-]*$/);
+        if (m && cmd) {
+          state.input =
+            state.input.slice(0, m.index + m[1].length) + cmd.insert;
+          state.histIndex = -1;
+        }
+        state.slash = null;
+        return;
       }
-      state.slash = null;
-      return;
     }
     if (k === "escape") {
       state.slash = null;
@@ -2177,11 +3049,12 @@ async function handleKey(k) {
     return;
   }
   if (state.pendingTrustLevel === 3 && !state.input) {
-    if (k === "y") {
+    const confirmation = String(k).toLowerCase();
+    if (confirmation === "y") {
       await applyTrustLevel(3);
       return;
     }
-    if (k === "n" || k === "escape") {
+    if (confirmation === "n" || k === "escape") {
       state.pendingTrustLevel = null;
       state.status = "Trust level change cancelled.";
       return;
@@ -2197,7 +3070,7 @@ async function handleKey(k) {
       return;
     }
     if (state.view !== "chat") {
-      state.view = "chat";
+      state.view = state.view === "model" ? state.modelPreviousView : "chat";
       state.panelOpen = false;
       return;
     }
@@ -2261,6 +3134,33 @@ async function handleKey(k) {
       return;
     }
   }
+  if (!state.input && state.view === "model") {
+    const count = modelOptions().length;
+    if (k === "up" || k === "w")
+      state.modelSel = Math.max(0, state.modelSel - 1);
+    else if (k === "down" || k === "s")
+      state.modelSel = Math.min(Math.max(0, count - 1), state.modelSel + 1);
+    else if (k === "enter") {
+      const selected = modelOptions()[state.modelSel];
+      if (selected) {
+        try {
+          const result = await api("/api/models", {
+            method: "PUT",
+            body: JSON.stringify({
+              provider: selected.provider,
+              model: selected.model,
+            }),
+          });
+          state.modelCurrent = result.current;
+          state.status = `Model changed: ${selected.provider} / ${selected.model}`;
+          state.view = state.modelPreviousView;
+        } catch (err) {
+          state.status = err.message;
+        }
+      }
+    }
+    return;
+  }
   if (!state.input && ["1", "2", "3", "4", "5"].includes(k)) {
     if (state.panelOpen) {
       const panelViews = ["list", "projects", "skills", "help"];
@@ -2291,6 +3191,40 @@ async function handleKey(k) {
     }
     return;
   }
+  if (
+    state.view === "help" &&
+    !state.input &&
+    ["up", "down", "pageup", "pagedown", "home", "end"].includes(k)
+  ) {
+    const amount = k === "pageup" || k === "pagedown" ? 8 : 3;
+    if (k === "home") state.scroll = 0;
+    else if (k === "end") state.scroll = Number.MAX_SAFE_INTEGER;
+    else {
+      state.scroll = Math.max(
+        0,
+        (state.scroll || 0) + (k === "up" || k === "pageup" ? -amount : amount),
+      );
+    }
+    return;
+  }
+  if (
+    state.view === "chat" &&
+    state.exp &&
+    !state.input &&
+    ["up", "down", "pageup", "pagedown", "home", "end"].includes(k)
+  ) {
+    state.follow = false;
+    if (k === "home") state.scroll = 0;
+    else if (k === "end") state.follow = true;
+    else {
+      const amount = k === "pageup" || k === "pagedown" ? 8 : 3;
+      state.scroll = Math.max(
+        0,
+        (state.scroll || 0) + (k === "up" || k === "pageup" ? -amount : amount),
+      );
+    }
+    return;
+  }
   if (state.panelOpen && (k === "left" || k === "right")) {
     const panelViews = ["list", "projects", "skills", "help"];
     const offset = k === "left" ? -1 : 1;
@@ -2302,6 +3236,18 @@ async function handleKey(k) {
     return;
   }
   if (k === "enter") {
+    if (
+      state.view === "chat" &&
+      state.exp?.status === "completed" &&
+      !state.input
+    ) {
+      state.showDetails = !state.showDetails;
+      state.status = state.showDetails
+        ? "Full task details shown."
+        : "Task details minimized.";
+      state.follow = true;
+      return;
+    }
     if (state.view === "trust" && !state.input) {
       await runCommand(`/trust ${state.trustSel}`);
       if (!state.pendingTrustLevel) state.view = "check";
@@ -2328,6 +3274,7 @@ async function handleKey(k) {
     const text = state.input;
     if (text.trim().startsWith("/")) {
       state.input = "";
+      state.pasteDisplay = "";
       state.slash = null;
       state.questions = null;
       await runCommand(text.trim());
@@ -2335,6 +3282,7 @@ async function handleKey(k) {
       state.history.push(text.trim());
       if (state.history.length > 100) state.history.shift();
       state.input = "";
+      state.pasteDisplay = "";
       state.histIndex = -1;
       state.slash = null;
       state.questions = null;
@@ -2348,7 +3296,11 @@ async function handleKey(k) {
     }
     return;
   }
-  if ((k === "up" || k === "down" || k === "w" || k === "s") && !state.input) {
+  if (
+    (k === "up" || k === "down" || k === "w" || k === "s") &&
+    !state.input &&
+    (state.panelOpen || state.view === "list" || state.view === "projects")
+  ) {
     if (state.panelOpen) {
       if (state.panelView === "list") {
         const n = state.experiments.length;
@@ -2374,13 +3326,6 @@ async function handleKey(k) {
         state.projectSel =
           (state.projectSel + (k === "up" || k === "w" ? -1 : 1) + n) % n;
       return;
-    }
-    if (state.view === "chat" && state.exp) {
-      state.follow = false;
-      state.scroll = Math.max(
-        0,
-        (state.scroll || 0) + (k === "up" || k === "w" ? -3 : 3),
-      );
     }
     return;
   }
@@ -2420,6 +3365,7 @@ async function handleKey(k) {
   }
   if (k === "backspace") {
     state.input = state.input.slice(0, -1);
+    if (!state.input) state.pasteDisplay = "";
     state.histIndex = -1;
     updateSlash();
     return;
@@ -2436,6 +3382,17 @@ const watching = new Set();
 async function watchExp(id) {
   if (watching.has(id)) return;
   watching.add(id);
+  state.streamBuffer = "";
+  state.streamActive = false;
+  wsConnect();
+  wsSubscribe(id);
+  wsTokenCallback = (token) => {
+    if (!state.streamActive) {
+      state.streamActive = true;
+    }
+    state.streamBuffer += token;
+    renderFrame();
+  };
   try {
     while (watching.has(id)) {
       await sleep(POLL_MS);
@@ -2447,6 +3404,10 @@ async function watchExp(id) {
       if (idx >= 0) state.experiments[idx] = exp;
       renderFrame();
       if (["completed", "failed", "cancelled"].includes(exp.status)) {
+        state.streamBuffer = "";
+        state.streamActive = false;
+        wsTokenCallback = null;
+        wsUnsubscribe(id);
         await loadExperiments();
         watching.delete(id);
         await drainTaskQueue();
@@ -2454,6 +3415,10 @@ async function watchExp(id) {
       }
     }
   } catch {
+    state.streamBuffer = "";
+    state.streamActive = false;
+    wsTokenCallback = null;
+    wsUnsubscribe(id);
     watching.delete(id);
   }
 }
@@ -2466,7 +3431,7 @@ function cleanExit() {
   } catch {}
   stdout.write(
     state.screenActive
-      ? "\x1b[?25h\x1b[0m\x1b[?1049l"
+      ? "\x1b[?25h\x1b[?2004l\x1b[0m\x1b[?1049l"
       : "\x1b[?25h\x1b[0m\x1b[2J\x1b[H",
   );
   exit(0);
@@ -2482,10 +3447,11 @@ export async function runTui() {
   stdin.setRawMode(true);
   stdin.resume();
   stdin.setEncoding("utf8");
-  stdout.write("\x1b[?1049h\x1b[2J\x1b[H");
+  stdout.write("\x1b[?1049h\x1b[?2004h\x1b[2J\x1b[H");
   state.screenActive = true;
   renderFrame();
   await ensureBackend();
+  wsConnect();
   await Promise.all([
     loadExperiments(),
     loadProjects(),

@@ -130,6 +130,10 @@ class ProgressBroadcaster {
     this.broadcast(experimentId, { type: "error", error });
   }
 
+  token(experimentId, token) {
+    this.broadcast(experimentId, { type: "token", token });
+  }
+
      
                                 
      
