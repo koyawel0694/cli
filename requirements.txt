@@ -1,0 +1,238 @@
+HERMES - REQUIREMENTS & TO-DO LIST
+===================================
+
+Status: Phases 1-7 built. The Hermes.txt roadmap is complete.
+
+
+PART A - THINGS YOU NEED TO DO (setup / config)
+------------------------------------------------
+
+[x] 1. Set a vision-capable model in backend/.env
+      - Done: OPENAI_MODEL=qwen/qwen3.6-27b (free Groq model, supports BOTH
+        vision + tool calling — verified). No paid model needed. Fallbacks:
+        openai/gpt-oss-120b, openai/gpt-oss-20b (text-only; skipped
+        automatically when the request needs vision).
+
+[x] 2. Web search without an API key (free option chosen)
+      - search_web now scrapes DuckDuckGo HTML results — real results
+        (title/url/snippet), no key needed. BRAVE_API_KEY in backend/.env
+        is still honored first if you ever add one (fuller results).
+
+[x] 3. Smoke-test the new features (one by one):
+      [x] Run an experiment and watch the live progress checklist appear
+      [x] Debug mode: paste an error -> check the Diagnosis card + Explain /
+          Show Files / Suggest Fix / Apply Fix buttons
+      [x] Apply Fix: tried on the stress-test project (fix.js, duplicate
+          const age) — wrote to disk, Allow once / Deny prompt confirmed
+          (npm install paused -> allow_once ran it, deny fed "denied by
+          user" back to the agent), rollback restored the file.
+      [x] Analyze UI: uploaded a generated mockup screenshot -> full UI
+          Breakdown card (Layout / Responsive / UX / Recommendation)
+      [x] Ask a general question that needs a calculation or file search and
+          check the "Thought" section lists the tools Hermes used
+
+[x] 4. Decide on the free model vs paid model question
+      - Decided: stay on the free Groq model (qwen/qwen3.6-27b). It has
+        vision + tool calling, so the UI Analyzer works. Only downside is
+        rate limits — if they get annoying, switch OPENAI_MODEL in
+        backend/.env to a paid vision-capable model.
+
+
+PART B - WHAT IS BUILT (for reference)
+--------------------------------------
+
+[x] Phase 1 - Hermes Core
+    - Dashboard, prompt box, experiments + history, chat threads, online status.
+[x] Phase 2 - Project Context
+    - Add projects by folder path, file browser, name + content search,
+      file viewer, active project attachment, context building.
+[x] Phase 3 - Debugging
+    - Debug mode, Diagnosis card (cause/location/why/fix/confidence),
+      live progress checklist, severity findings,
+      Explain | Show Files | Suggest Fix | Apply Fix (with permission prompt).
+[x] Phase 4 - UI Analyzer
+    - Analyze UI mode (upload/drag-drop screenshot), UI Breakdown card
+      (Layout / Responsive / UX / Recommendation), Better direction follow-up.
+[x] Phase 5 - Tools
+    - Agent loop: Hermes picks tools itself during experiments.
+    - Active: Read File, Search Files, Project Scanner, Calculator,
+      JSON Parser, Search Web, Analyze Image.
+    - Locked (Phase 7): Execute Command, Modify File, Git.
+[x] Phase 6 - Memory
+    - Global memory (about you / preferences) + per-project memory (stack,
+      structure, conventions) editable in the Memory view.
+    - "Learn from scan" auto-generates project memory from a scan.
+    - Memory is injected into every experiment's system prompt.
+    - Storage: backend/data/memory.json.
+[x] Phase 7 - Agent
+    - Trust levels (Level 1 suggest-only -> Level 3 full autonomous),
+      configurable in the Settings view.
+    - Risk scoring: low-risk actions auto-run by level; high-risk always ask.
+    - Tools unlocked: Execute Command, Modify File, Git (approval-gated).
+    - Permission flow: experiment pauses -> [Allow Once] [Allow This Task]
+      [Deny] -> resumes with the result (or a denial) fed back to Hermes.
+    - Diff & rollback: Before/After view after Apply Fix + one-click rollback.
+    - Tests/builds run via execute_command (npm test, npm run build, ...).
+
+
+PART C - NICE-TO-HAVES (beyond the Hermes.txt roadmap)
+------------------------------------------------------
+
+[x] Files sidebar view: real file browser now lives in the Files nav item —
+    project picker, name + content search, rescan, and the file viewer.
+[x] Stale "running" recovery: backend startup sweep marks experiments stuck in
+    "running" as failed with a clear message ("backend restarted while this
+    experiment was running") so the reply box unlocks again.
+[x] "Explain this code" mode, refactoring suggestions, commit message gen
+    - Explain this code: DONE. Files view -> open a file -> "Explain file"
+      or select/highlight any code -> "Explain selection" -> modal with
+      structured explanation (What it does / Inputs & outputs / Details).
+      Backend: POST /api/explain (whole file or exact selection + context).
+    - Refactoring suggestions + commit message gen: still TODO.
+[x] Automation triggers (upload -> scan -> report)
+    - DONE. New "Automation" view (sidebar): master enable + toggles for
+      "Scan new projects" and "Validate new JSON files", interval (1-60 min),
+      "Run scans now" button, and recent automation reports.
+    - Trigger 1: adding a project auto-fires a scan experiment
+      ("Automated scan of X" — AI analysis, findings, recommendation).
+    - Trigger 2: poller (interval) detects new .json files in projects,
+      JSON.parse validates them, broken files get an automation report.
+    - All reports are experiments with kind="automation" (auto badge in
+      the list) + Auto subtype (scan/json). Backend: data/automation.json,
+      POST /api/automation/run, GET/PUT /api/automation. Write-locked
+      experiment creation (parallel automation runs were racing).
+[x] Brainstorming skill - controlled iterative reasoning for hard problems.
+      - DONE. "Brainstorm" quick action / /brainstorm slash command (or just
+        type "brainstorm: <problem>"). Runs the full pipeline against the
+        free model:
+        - Round 1: generate N DIFFERENT candidates (default 3) -> critique
+          each (feasibility/complexity/cost/reliability/scalability/security,
+          score 0-10, unsafe candidates forced to 0) -> compare -> refine
+          strongest in the next round.
+        - Stops early when best score >= stopping threshold (default 8) or
+          when a round stops improving. Never more than max_iterations
+          (default 3). No uncontrolled loops.
+        - If the problem is too vague -> asks ONE clarifying question instead
+          of guessing. If it needs data/tools it doesn't have (web search,
+          running code) -> says so instead of inventing.
+        - Output: structured result stored on the experiment (problem,
+          iterations, candidates, critiques, scores, confidence) + user-facing
+          markdown report (Best solution / Why / Trade-offs / Next steps /
+          Uncertainties / Confidence / Alternatives compared table).
+        - UI: Brainstorming session card under the reply (iterations,
+          candidates with score pills, best, confidence).
+      - Reusable: backend/brainstorm.js exports brainstorm({problem,
+        constraints, context, config, callAI, log}) — zero server.js
+        dependencies, takes any OpenAI-compatible callAI.
+      - Config: backend/data/brainstorm.json + GET/PUT /api/brainstorm
+        (maxIterations 1-5, stoppingThreshold 1-10, numCandidates 2-5).
+      - Logging: [brainstorm] skill started / iteration / final / completed /
+        failed. Never logs keys or tokens (only problem excerpt + counts).
+      - Tests: backend/test/brainstorm.test.js (npm test — node:test, no
+        deps, mocked AI): simple, ambiguous (clarify), needs-tools, unsafe
+        candidate, iteration limits (1 stays 1, 3 never exceeds 3),
+        no-improvement stop, config clamping, AI failure, garbage output,
+        empty problem. 11/11 pass. Verified end-to-end on the real model:
+        "how should I handle file uploads" -> 3 candidates, best 9/10
+        (threshold met -> 1 iteration), 92% confidence, full report.
+      - Separately (later): Obsidian vault as knowledge layer, VPS deploy
+        (1 GB RAM - check feasibility + swap as safety only), VPS security
+        (SSH keys, env vars, never plaintext passwords in files/skills/logs).
+[x] Multi-provider AI layer (Gemini + OpenRouter + OpenAI-compatible)
+    - DONE. backend/aiProviders.js: provider interface (generate,
+      isAvailable, supportsVision) + router. All providers speak OpenAI wire
+      format at the boundary (messages, tool_calls, image_url), so server.js
+      only changed in one place — callAI() is now a thin router call.
+      Skills (brainstorm, debug, UI analysis, automation) are provider-
+      independent; they just call callAI().
+    - Providers:
+      * OpenAI-compatible (Groq/OpenAI/DeepSeek/...) — previous fetch loop
+        moved verbatim into OpenAICompatibleProvider.
+      * Gemini — official @google/genai SDK. Converts OpenAI wire format to
+        Gemini contents: systemInstruction, inlineData for images,
+        functionCall/functionResponse for tools (tool results paired by
+        order), MAX_TOKENS -> cut-off error. finishReason/parts parsing.
+      * OpenRouter — OpenAI-compatible API at openrouter.ai, 402 -> quota.
+    - Router: AI_PROVIDER selects primary (default openai), AI_FALLBACK_PROVIDER
+      the fallback (default openai). Rate limit/quota/timeout/network/5xx/
+      empty -> next provider. auth/400/404 -> abort immediately (config error).
+      Bounded retries per provider (AI_PROVIDER_RETRIES, default 1, backoff
+      750ms). AI_MAX_FALLBACKS caps fallback count. Vision requests skip
+      providers that declare no vision support. Timeout via
+      AI_REQUEST_TIMEOUT_MS (default 90s).
+    - Errors normalized to ProviderError codes: auth | rate_limit | quota |
+      timeout | network | server | model | bad_request | empty | unknown.
+      All-failed error lists every provider tried + reasons. No secrets ever
+      in messages/logs.
+    - Logging: [AI] Provider: X | Model: Y | Request started/completed/
+      failed/skipped. Keys never logged.
+    - Config: backend/.env — GEMINI_API_KEY/GEMINI_MODEL,
+      OPENROUTER_API_KEY/OPENROUTER_MODEL (default deepseek/deepseek-chat-
+      v3-0324:free, changeable without code), AI_PROVIDER,
+      AI_FALLBACK_PROVIDER, AI_MAX_FALLBACKS, AI_PROVIDER_RETRIES,
+      AI_REQUEST_TIMEOUT_MS. backend/.env.example documents everything.
+      backend/.gitignore already excludes .env.
+    - Tests: backend/test/aiProviders.test.js (17 tests, node:test, mocked
+      fetch/client — no network): missing keys (5/6), both unavailable (7),
+      fallback on rate limit (3/4 pattern), auth never falls back, bounded
+      retries, error normalization 401/402/429/5xx/404/timeout/network,
+      OpenRouter tool_calls parsing, Gemini conversion (systemInstruction,
+      functionResponse pairing, inlineData, functionCall), vision routing,
+      skippable model errors. Live tests: backend/test/ai-live.js
+      (npm run ai:test) — Tests 1-4 with real keys from backend/.env
+      (skips cleanly when a key is missing; also prints a Gemini vs
+      OpenRouter model comparison when both keys exist).
+    - Verified: full suite 28/28 pass; backend restarted; real experiment
+      through the router on the existing Groq provider completes normally.
+      Brainstorm skill still works (provider-independent by design).
+
+
+PART D - HERMES AGENT BRIDGE (connect to the Nous Research Hermes Agent)
+--------------------------------------------------------------------------
+
+[x] Bridge mode: hand experiments to a locally-running Hermes Agent
+    - Concept: the app PREPS (project scan, relevant files, memory) then
+      hands the task to the user's local Hermes Agent (Nous Research,
+      hermes-agent.nousresearch.com) which EXECUTES with its own tools
+      (terminal, file edits, git, skills, memory) — then the app verifies
+      and reports. The app is the work-prep layer; the agent is the doer.
+    - Config: backend/data/bridge.json + Settings view "Hermes Agent
+      bridge" card. Fields: enabled, baseUrl (default
+      http://127.0.0.1:8642/v1 — the agent's OpenAI-compatible API
+      server), apiKey (API_SERVER_KEY), verifyCommand (optional, e.g.
+      "npm test"), timeoutMs (default 5 min). Test connection button.
+    - Agent setup (one time, on the user's machine): install Hermes Agent
+      (irm https://hermes-agent.nousresearch.com/install.ps1 | iex), set
+      API_SERVER_ENABLED=true + API_SERVER_KEY in ~/.hermes/.env, run
+      `hermes gateway`, then point the app at it. The agent needs its own
+      model key (Nous Portal / OpenRouter / Groq / any).
+    - Handoff flow (backend/server.js -> backend/bridge.js):
+      1. buildProjectContext + memory as usual (existing code)
+      2. snapshot the project (sizes + mtimes, ignoring node_modules etc.)
+      3. build handoff prompt: task + project path/map + relevant files +
+         memory (+ last messages on replies) with a strict
+         Steps/Findings/Summary output structure
+      4. POST {baseUrl}/chat/completions (Bearer apiKey, 5 min timeout)
+      5. agent's final answer is stored on the experiment; progress shows
+         "Handing off to Hermes Agent" while it works
+      6. re-snapshot -> diff -> changed/added/removed files reported on a
+         "Handed off to Hermes Agent" card in the experiment view
+      7. verifyCommand runs in the project folder (skipped at trust
+         level 1 — suggest only; exit code + output shown on the card)
+    - Behavior notes:
+      - Bridge only engages when a project is attached and bridge is on;
+        otherwise the built-in AI flow runs unchanged. UI/image/brainstorm
+        tasks stay local on purpose (bridge is for doing work on code).
+      - If the agent is unreachable the experiment fails with a clear
+        message ("Cannot reach the Hermes Agent at ... — start it with
+        \`hermes gateway\`"), no silent fallback.
+      - No live streaming: the UI shows "waiting for the agent" until the
+        final answer lands (agent streams internally, we take the final
+        message). Streaming integration is a future nicety.
+      - Experiment cards get an "agent" badge; replies in a bridged
+        experiment also go through the bridge with conversation history.
+    - Tests: backend/test/bridge.test.js (12 tests, node:test, mocked
+      fetch): config defaults/clamping/round-trip, callAgentApi success /
+      auth header / unreachable / non-ok / empty response, testBridge ping,
+      handoff prompt contents, snapshot diff detects changed/added/removed
+      and ignores node_modules. All pass (npm test).

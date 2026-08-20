@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hermes — AI Developer Assistant</title>
+    <meta name="description" content="Hermes is an AI developer assistant that investigates your code, finds bugs, and fixes them. Hand it a job, not a chat." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+                
+    <header class="nav">
+      <div class="nav-inner">
+        <a class="brand" href="#top">
+          <span class="brand-mark" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a4 4 0 0 1 4 4c0 1.1-.45 2.1-1.18 2.82L21 15v3h-2v-1h-2v1h-2v-1h-2v1h-2v-1h-2v1h-2v-1h-2v1h-2v-1H5v3H3v-6.17l-1.82-5.18A4 4 0 0 1 8 2c1.1 0 2.1.45 2.82 1.18L12 4.6l1.18-1.42A3.98 3.98 0 0 1 12 2z"/>
+            </svg>
+          </span>
+          <span class="brand-name">Hermes</span>
+          <span class="brand-tag">AGENT</span>
+        </a>
+        <nav class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#how">How it works</a>
+          <a href="#experiments">Experiments</a>
+        </nav>
+        <a class="btn btn-primary" href="#cta">Get started</a>
+      </div>
+    </header>
+
+                 
+    <section class="hero" id="top">
+      <div class="hero-inner">
+        <p class="eyebrow">Hand it a job, not a chat</p>
+        <h1>An AI that actually <em>does</em> the work.</h1>
+        <p class="hero-sub">
+          Hermes investigates your codebase, finds the bug, explains it in plain language,
+          and fixes it. Not another chatbot — a developer on demand.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary btn-lg" href="#cta">Try Hermes free</a>
+          <a class="btn btn-ghost btn-lg" href="#how">See how it works</a>
+        </div>
+        <div class="hero-demo" aria-hidden="true">
+          <div class="demo-bar">
+            <span class="demo-dot"></span>
+            <span class="demo-dot"></span>
+            <span class="demo-dot"></span>
+            <span class="demo-path mono">hermes &gt; investigate login bug</span>
+          </div>
+          <div class="demo-body">
+            <p class="demo-line done"><span class="check">✓</span> Understanding request</p>
+            <p class="demo-line done"><span class="check">✓</span> Inspecting authentication flow</p>
+            <p class="demo-line running"><span class="dot"></span> Analyzing suspicious behavior</p>
+            <div class="demo-result">
+              <p class="result-title">Experiment #024</p>
+              <p class="result-finding crit">🔴 Critical — sandboxed form submission</p>
+              <p class="result-finding warn">🟡 Warning — auth state handled inconsistently</p>
+              <p class="result-finding sug">🟢 Suggestion — simplify login event handling</p>
+              <div class="result-actions">
+                <span class="chip">Explain</span>
+                <span class="chip">Show Files</span>
+                <span class="chip chip-on">Apply Fix</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+                        
+    <section class="strip">
+      <div class="strip-inner">
+        <span class="strip-label">Built for real codebases</span>
+        <div class="strip-items">
+          <span class="strip-item mono">Lutopia</span>
+          <span class="strip-item mono">recipe.json</span>
+          <span class="strip-item mono">auth-flow.ts</span>
+          <span class="strip-item mono">pantry.js</span>
+          <span class="strip-item mono">supabase</span>
+        </div>
+      </div>
+    </section>
+
+                     
+    <section class="section" id="features">
+      <div class="section-inner">
+        <p class="eyebrow">Features</p>
+        <h2>Everything a dev needs,<br />in one command center.</h2>
+        <div class="grid">
+          <article class="card">
+            <div class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6"/></svg>
+            </div>
+            <h3>Debugging Assistant</h3>
+            <p>Paste any error and get the likely cause, exact file location, and a fix — explained in plain language, not error-speak.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3zM3 9h18M9 21V9"/></svg>
+            </div>
+            <h3>Project Analyzer</h3>
+            <p>Point it at a folder and Hermes builds a map — file counts, potential issues, health scores — and answers questions about your real code.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+            </div>
+            <h3>UI Analyzer</h3>
+            <p>Upload a screenshot and get layout, responsiveness, and UX feedback — plus a better direction if you ask for one.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            </div>
+            <h3>Real Tools</h3>
+            <p>Read files, search code, scan projects, parse JSON, search the web, and analyze images. Hermes picks the right tool — and uses it.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7zM9 21h6"/></svg>
+            </div>
+            <h3>Long-term Memory</h3>
+            <p>Project memory and global memory persist between sessions. Hermes remembers your conventions, preferences, and history.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            </div>
+            <h3>Autonomous Agent</h3>
+            <p>Understand, inspect, plan, fix, test, verify, report. With a permission system so you stay in control — from suggest-only to full auto.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+                         
+    <section class="section section-alt" id="how">
+      <div class="section-inner">
+        <p class="eyebrow">How it works</p>
+        <h2>From question to fix,<br />step by step.</h2>
+        <ol class="steps">
+          <li class="step">
+            <span class="step-num">01</span>
+            <div class="step-body">
+              <h3>Give Hermes a job</h3>
+              <p>“Why did login stop working?” — one sentence is enough.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">02</span>
+            <div class="step-body">
+              <h3>It inspects the code</h3>
+              <p>Reads the relevant files, follows the flow, and identifies suspicious behavior.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">03</span>
+            <div class="step-body">
+              <h3>You get a diagnosis</h3>
+              <p>Findings grouped by severity: critical, warning, suggestion — with confidence scores.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">04</span>
+            <div class="step-body">
+              <h3>It applies the fix</h3>
+              <p>With your permission, Hermes modifies files, runs tests, and reports what changed.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+                        
+    <section class="section" id="experiments">
+      <div class="section-inner">
+        <p class="eyebrow">Experiments</p>
+        <h2>Every task becomes a saved experiment.</h2>
+        <div class="exp-grid">
+          <div class="exp-card">
+            <div class="exp-head">
+              <span class="exp-id mono">#021</span>
+              <span class="exp-status">completed</span>
+            </div>
+            <p class="exp-task">Find duplicate recipes across JSON and Markdown lists.</p>
+          </div>
+          <div class="exp-card">
+            <div class="exp-head">
+              <span class="exp-id mono">#022</span>
+              <span class="exp-status">completed</span>
+            </div>
+            <p class="exp-task">Analyze the pantry page UI from a screenshot.</p>
+          </div>
+          <div class="exp-card running">
+            <div class="exp-head">
+              <span class="exp-id mono">#023</span>
+              <span class="exp-status">analyzing</span>
+            </div>
+            <p class="exp-task">Trace why Supabase sync stopped working.</p>
+          </div>
+          <div class="exp-card">
+            <div class="exp-head">
+              <span class="exp-id mono">#024</span>
+              <span class="exp-status">completed</span>
+            </div>
+            <p class="exp-task">Investigate why the login button isn't working.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+                
+    <section class="cta" id="cta">
+      <div class="cta-inner">
+        <p class="eyebrow">Get started</p>
+        <h2>Hand Hermes a real problem.</h2>
+        <p>Connect a project and watch it investigate, diagnose, and fix — while you stay in control.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary btn-lg" href="#">Launch Hermes</a>
+          <a class="btn btn-ghost btn-lg" href="#features">Explore features</a>
+        </div>
+      </div>
+    </section>
+
+                   
+    <footer class="footer">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <span class="brand-name">Hermes</span>
+          <p>An AI developer assistant that does real work.</p>
+        </div>
+        <div class="footer-links">
+          <a href="#features">Features</a>
+          <a href="#how">How it works</a>
+          <a href="#experiments">Experiments</a>
+          <a href="#cta">Get started</a>
+        </div>
+        <p class="footer-copy mono">© 2026 Hermes · Built one experiment at a time</p>
+      </div>
+    </footer>
+  </body>
+</html>  

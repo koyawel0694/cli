@@ -1,0 +1,45 @@
+HERMES - INSTALLED PACKAGES / DOWNLOADS
+========================================
+
+Runtime tools (not npm packages):
+  - Node.js v24.15.0
+  - npm 11.12.1
+  - (No Python/pip needed - requirements.txt is documentation only)
+
+BACKEND (backend/package.json -> backend/node_modules):
+  - express ^4.21.2        - HTTP server/framework
+  - cors ^2.8.5            - CORS middleware
+  - dotenv ^16.4.5         - loads backend/.env
+  - @google/genai ^2.17.1  - Google Gemini SDK (added for the multi-provider layer)
+  - No devDependencies (tests use built-in node:test)
+
+FRONTEND (frontend/package.json -> frontend/node_modules):
+  - react ^19.2.8, react-dom ^19.2.8   - UI framework
+  - vite ^8.2.0 + @vitejs/plugin-react ^6.0.4 - dev server/bundler
+  - oxlint ^1.75.0                     - linter (npm run lint)
+  - @types/react ^19.2.17, @types/react-dom ^19.2.3 - TS types for editor hints
+
+Notes:
+  - No global npm installs required.
+  - Only @google/genai was added during development; the rest came with the original project scaffold.
+  - AI providers (Groq/Gemini/OpenRouter) need API keys in backend/.env, not packages.
+
+HERMES AGENT (Nous Research) - installed 2026-08-19 for the bridge feature:
+  Install location: C:\Users\Jandred Arcaina\AppData\Local\hermes\
+  - hermes-agent v0.19.0 (Python 3.11.15) - official PyPI package, installed via uv
+    into %LOCALAPPDATA%\hermes\hermes-agent\.venv (git installer was blocked
+    by GitHub rate limits, so the official PyPI wheel was used instead)
+  - CLI: %LOCALAPPDATA%\hermes\hermes-agent\.venv\Scripts\hermes.exe
+  - aiohttp - added manually (needed by the gateway's API server adapter)
+  - managed uv 0.12.5 in %LOCALAPPDATA%\hermes\bin (came with the installer attempt)
+  Config written:
+  - ~/.hermes/.env        - OPENROUTER_API_KEY (reused from backend/.env),
+                            OPENROUTER_MODEL=openrouter/free, API_SERVER_ENABLED=true,
+                            API_SERVER_KEY=c4c28efb24973bab
+  - %LOCALAPPDATA%\hermes\config.yaml - model = openrouter/free
+  Running: hermes gateway run (API server on http://127.0.0.1:8642/v1)
+  Restart after reboot:
+    & "$env:LOCALAPPDATA\hermes\hermes-agent\.venv\Scripts\hermes.exe" gateway run --accept-hooks
+  Note: pre-existing install traces were found (%LOCALAPPDATA%\hermes\state.db,
+  memories/, skills/, logs/ - last used 2026-08-10). The old repo folder was moved
+  aside to hermes-agent.broken-20260818-235936 when the new install attempted.

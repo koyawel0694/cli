@@ -1,0 +1,246 @@
+# Hermes — AI Experiment & Developer Assistant
+
+The whole point of Hermes is to give it real work. Not "chat with the AI" — actually hand it a task, let it poke around the files, reason about what it finds, and come back with something you can use.
+
+And honestly, the experiment part is the product. We're building the workspace around Hermes so we keep discovering new things it can do.
+
+What problem are we solving?
+
+You're in the middle of building Lutopia. Something breaks. "Why did login stop working?"
+
+Normally that means opening fifteen files and tracing the flow by hand. With Hermes you just say:
+
+"Investigate why login stopped working."
+
+And it walks through the job:
+
+- understand the task
+- figure out what information it needs
+- inspect the relevant files
+- analyze
+- find the likely cause
+- explain it in plain language
+- suggest a solution
+- (optionally) perform the action
+
+That's it. That's the whole core concept.
+
+ The main UI
+
+I don't want this to feel like ChatGPT. I want it to feel like a command center.
+
+Left sidebar: Dashboard, Experiments, Projects, Files, Tools, Memory, Settings. Main area: "What do you want Hermes to do?" with a prompt box, and a "● Online" status up top.
+
+ The experiment system — the heart of it
+
+Every task becomes an Experiment. Like:
+
+Experiment #024
+- Task: Find why my login button isn't working.
+- Status: Analyzing...
+
+While it works, it shows the process at a high level:
+
+✓ Understanding request
+✓ Identifying relevant files
+✓ Inspecting authentication flow
+✓ Finding suspicious behavior
+✓ Preparing recommendation
+
+Then the result, grouped by severity:
+
+🔴 Critical — Sandboxed form submission
+🟡 Warning — Auth state isn't handled consistently
+🟢 Suggestion — Simplify login event handling
+
+And from there: Explain | Show Files | Suggest Fix | Apply Fix.
+
+ Project Analyzer
+
+This is where it stops being a toy.
+
+Point it at a project — Lutopia with its index.html, login.html, css/, js/, assets/ — and it builds a map:
+
+- 87 files: 23 JavaScript, 12 HTML, 31 CSS
+- 7 potential issues
+- Auth health 92%, UI consistency 71%, code organization 63%
+
+Then you can just ask things like "Where's the login system?" or "What could break the pantry?" and get real answers about your actual codebase.
+
+ Debugging Assistant
+
+Probably the #1 daily use case.
+
+Paste an error — "Cannot read properties of undefined" — and Hermes gives you:
+
+- Likely cause: recipe.ingredients is undefined
+- Location: recipe.js, line 184
+- Why: in normal language, not error-speak
+- Suggested fix: actual code
+- Confidence: 87%
+
+That alone is a reason to keep coming back.
+
+ UI Analyzer
+
+Since you're always designing Lutopia, this one's personal.
+
+Upload a screenshot and Hermes breaks it down:
+
+- Layout: hero hierarchy good, nav spacing needs work, CTA visibility good
+- Responsive: desktop fine, tablet iffy, mobile risks overflow
+- UX: primary action isn't visually dominant enough, section spacing inconsistent
+
+Then ask "give me a better direction" and it proposes one.
+
+Tools
+
+Text generation only gets you so far. Give Hermes actual tools:
+
+✓ Read File  ✓ Search Files  ✓ Analyze Image  ✓ Search Web  ✓ Calculator  ✓ JSON Parser  ✓ Project Scanner
+○ Execute Command  ○ Modify File  ○ Git
+
+The magic moment: Hermes decides "I should search the project files first" — and just does it. That's the line between chatbot and agent.
+
+ Memory
+
+Right now you'd have to re-explain Lutopia every session. Memory fixes that.
+
+Project memory: uses Supabase, vanilla JS frontend, pantry in LocalStorage, claymorphism, desktop-first.
+
+Global memory is separate — that's about Hermes itself, not your project.
+
+ Experiment History
+
+Every experiment gets saved, so you can reopen #023 later, or compare: was attempt #2 actually better than #1?
+
+ Automation — later, not now
+
+Only after the basics work should we add triggers:
+
+"Whenever I upload a project, scan it for obvious issues" — upload → scan → analyze → report → notify.
+
+"Every time I add a recipe JSON, validate it against the schema."
+
+That's when Hermes starts doing work on its own. But again: later.
+
+ The autonomous agent — final stage, don't start here
+
+Hardest part, so don't build it first. The dream flow:
+
+1. Understand request
+2. Inspect project
+3. Find relevant files
+4. Identify the bug
+5. Propose the fix
+6. Ask permission
+7. Modify files
+8. Run tests
+9. Verify the result
+10. Report what changed
+
+That's the moment Hermes becomes genuinely interesting.
+
+ Architecture — keep it simple
+
+Hermes UI → Backend → AI model / Memory / Tools (Files, Web, Code) → Experiment DB.
+
+- Frontend: whatever you're comfortable with. HTML/CSS/JS is fine; move to React/Next when it starts hurting.
+- Backend: Node.js.
+- Database: you already know Supabase, so Supabase.
+- AI: sits behind the backend.
+
+ Roadmap — don't build everything at once
+
+Phase 1 — Hermes Core (easy): dashboard, chat/task input, AI response, experiment creation + history. Goal: give it a task, get a useful answer.
+
+Phase 2 — Project Context (manageable): uploads, project selection, file browser, search. Goal: it answers questions about a real project.
+
+Phase 3 — Debugging (intermediate): error input, code analysis, finding relevant files, diagnosis, suggested fixes. Goal: it's genuinely useful during development.
+
+Phase 4 — UI Analyzer (intermediate): screenshot upload, UI/UX/responsive analysis. Goal: it can look at both code and visuals.
+
+Phase 5 — Tools (challenging): file search, JSON parser, web search, image analysis, calculator, project scanner. Goal: Hermes picks which tool it needs.
+
+Phase 6 — Memory (challenging): project memory, experiment context, preferences, retrieval. Goal: it understands the project over time.
+
+Phase 7 — Agent (advanced): planning, multi-step execution, file modification, testing, permissions, rollback. Goal: it actually performs dev tasks.
+
+ Permission system — non-negotiable
+
+If Hermes can touch files, it can't do it freely. Before anything significant:
+
+"Hermes wants to: ✏️ Modify login.js, 🧪 Run npm test" → [Allow Once] [Allow This Task] [Deny]
+
+Dangerous ones get a scarier prompt: "npm install ..." → [Cancel] [Allow]
+
+Small touch, huge difference in trust and professionalism.
+
+ Trust levels — how autonomous should Hermes be?
+
+Command center man o autonomous — pwede pareho. Ang trick ay trust levels:
+
+Level 1 — Suggest only (default): nagrereport si Hermes ng issue, ikaw ang nag-aayos manually.
+
+Level 2 — Auto-fix low risk: kusang inaayos niya ang simple na mga bagay — formatting, missing semicolon, duplicate code, obvious refactors — tapos may log kung ano ang binago.
+
+Level 3 — Full autonomous: kaya niyang mag-edit ng files, mag-run ng tests, mag-verify, at mag-report — pero limited lang sa project na pinagkakatiwalaan mo.
+
+Ang smart middle ground: risk scoring. Titingnan ni Hermes kung gaano kalaki ang epekto ng fix. Formatting lang o maliit na utility function? Auto-apply. Ginalaw niya ang auth flow o database? Hihingi muna ng approval.
+
+Ganyan ikaw pa rin ang may control, pero hindi ka nagiging bottleneck sa mga menor na fixes. Start sa Level 1, unti-unting buksan ang Level 2–3 habang tumataas ang tiwala mo sa kanya.
+
+ AI companion improvements — next level
+
+Hindi lang command center. Habang tumatagal, gawin siyang tunay na kasama sa pagko-code:
+
+Debugging / coding:
+- Live error watcher — kusang nagmo-monitor ng console errors habang ginagamit mo ang Lutopia, hindi mo na kailangang i-paste
+- Diff & rollback viewer — bago i-apply ang fix, side-by-side ang old vs new code; one-click rollback
+- "Explain this code" mode — highlight kahit anong function sa file browser, ipapaliwanag niya kung ano ang ginagawa nito
+- Refactoring suggestions — "may duplicate code sa recipe.js at pantry.js, pwedeng gawing shared utility"
+- Best practices reviewer — security check (SQL injection, exposed keys), performance (unnecessary re-renders, malalaking assets)
+- Test generator — galing sa bug na inayos niya, mag-susuggest ng test para hindi na maulit
+- Commit message + PR summary — "tapos ko na ang fix" → siya na ang gumagawa ng commit message at changelog
+
+Memory upgrades:
+- Session continuity — alam niya kung ano ang ginagawa mo kahapon, kung saan ka huminto
+- Screenshot memory — tandaan ang current UI state, para may reference siya kung "bakit iba na ang hitsura ng login page"
+- Preference learning — natatandaan kung gusto mo ng maikling sagot, o Taglish, o may code samples lagi
+
+Workflow:
+- Multi-project support — hindi lang Lutopia; ibang folder ay hiwalay na memory at context
+- Pair programming mode — nagre-review siya habang nagta-type ka, nagta-tag ng issues real-time
+- Task automation templates — "gumawa ako ng recipe → automatic validate + add to index"
+- Dependency health — "may outdated packages ka" + "eto ang breaking changes na dapat mong alamin"
+- Quick action — i-select ang error text anywhere → Ctrl+Shift+H → Hermes nag-aanalyze
+
+Integration / extension:
+- DevTools link — kukunin niya ang network requests at DOM state para mas accurate ang UI analysis
+- Supabase integration — kaya niyang i-query ang schema at i-check ang row-level security, hindi lang code
+- Shareable experiment reports — i-export ang diagnosis bilang markdown para sa ka-team o sa future self
+- Voice input — "bakit ayaw gumana ng button?" habang nagko-coding
+
+Ang pinakamaganda sa lahat: proactive suggestions — habang nagtatrabaho ka, sabihin niya ang "hey, pansin ko na repetitive ang localStorage code mo, gawin kong utility?" Doon siya nagiging tunay na companion, hindi reaktibong tool.
+
+ The end state
+
+Open Hermes and see: a prompt box ("What should I do?"), quick actions (Debug, Analyze UI, Project, Experiment, Automate), and recent experiments. Hermes isn't a thing you chat with — it's a thing you hand a job to.
+
+ Why build it at all
+
+Because we already have the perfect test bed: Lutopia. Real problems, not invented ones:
+
+- "Why did Supabase stop syncing?"
+- "Find duplicate recipes."
+- "Analyze this UI."
+- "Why isn't this button working?"
+- "Check if these JSON recipes match my Markdown list."
+- "Find unused JavaScript."
+- "Explain this error."
+
+Every real problem you throw at it becomes a new capability. The project grows itself.
+
+Build it in phases. Trying to build the whole vision at once: hard. Following the phases: easy → manageable → intermediate → challenging → advanced, step by step.
+
+Don't start by building the AI agent. Start by building the place where the agent will eventually live.
