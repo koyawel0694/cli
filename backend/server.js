@@ -1,6 +1,8 @@
 import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs/promises";
@@ -47,7 +49,19 @@ const BRAINSTORM_FILE = path.join(DATA_DIR, "brainstorm.json");
 const KNOWLEDGE_FILE = path.join(DATA_DIR, "knowledge.json");
 
 const app = express();
-app.use(cors());
+
+// Security: helmet + restricted CORS + rate limit
+const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173,http://localhost:4000")
+  .split(",").map(s => s.trim()).filter(Boolean);
+app.use(helmet());
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  credentials: true,
+}));
+app.use(rateLimit({ windowMs: 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false }));
 app.use(express.json({ limit: "12mb" }));
 app.use("/api/uploads", express.static(path.join(DATA_DIR, "uploads")));
 
